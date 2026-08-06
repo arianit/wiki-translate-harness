@@ -7,7 +7,11 @@ output/
 cache/
 logs/
 quality/
+quality_benchmark/
 stats.json
 .pytest_cache/
 .ruff_cache/
-.claude/settings.local.json
+.claude/
+albanian_mythology*
+filter_existing.py
+
