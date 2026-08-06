@@ -24,6 +24,8 @@ A recent benchmark translating the English article **"Enji (deity)"** to Albania
 
 **Recommendation:** `deepseek/deepseek-v3.2` offers the best quality/cost balance for English→Albanian Wikipedia translation; `google/gemini-2.5-flash` is 3× faster with identical quality.
 
+*Full results are documented in [GitHub Issue #1](https://github.com/arianit/wiki-translate-harness/issues/1).*
+
 ## How skill invocation works
 
 The skill was written to be followed by an interactive agent with shell/tool
