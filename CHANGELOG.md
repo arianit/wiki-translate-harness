@@ -17,6 +17,9 @@ All notable changes to this project will be documented in this file.
 - Updated `cli.py` with `--judge-model` and `--no-evaluation` options
 - Enhanced README with example benchmark and usage instructions
 
+### Removed
+- Test files `albanian_mythology`, `albanian_mythology.missing`, `filter_existing.py` from repository (moved to .gitignore)
+
 ## [0.1.0] - 2026-08-04
 
 ### Added
