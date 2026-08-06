@@ -1,0 +1,233 @@
+"""OpenRouter chat-completions client: retry/backoff and pricing lookup only.
+
+No translation prompts live here — callers pass in whatever messages the
+skill_loader built. This module only knows how to talk to OpenRouter.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import random
+import time
+from typing import Callable
+
+import httpx
+
+from wiki_translate_harness.models import ModelPricing, TranslationResult
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
+
+RetryCallback = Callable[[int, str, float], None]
+
+
+class OpenRouterError(Exception):
+    pass
+
+
+class OpenRouterClient:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        user_agent: str,
+        timeout: float = 120.0,
+        max_retries: int = 5,
+    ):
+        self.max_retries = max_retries
+        # Confirmed in practice, twice: httpx's own `timeout=` did not
+        # reliably fire under real network conditions (sockets sat in
+        # CLOSE-WAIT with unread data for 20+ minutes past the configured
+        # timeout, hanging the whole batch run indefinitely). This is a
+        # hard, independent backstop around every individual call attempt
+        # — asyncio.wait_for guarantees cancellation regardless of what
+        # httpx/the underlying transport is doing.
+        self._hard_timeout = timeout + 30.0
+        self._client_kwargs = dict(
+            base_url=base_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": user_agent,
+                "HTTP-Referer": "https://github.com/arianit/enwiki-sqwiki-translation",
+                "X-Title": "wiki-translate-harness",
+            },
+            timeout=timeout,
+        )
+        self._client = httpx.AsyncClient(**self._client_kwargs)
+        self._pricing_cache: dict[str, ModelPricing] | None = None
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def _reset_connection(self) -> None:
+        # asyncio.wait_for cancels the in-flight httpx call on our hard
+        # timeout, but cancellation doesn't guarantee httpx cleanly evicts
+        # the underlying connection from its keep-alive pool — confirmed in
+        # practice: repeated retries after a timeout kept failing with the
+        # identical error, on what should be independent attempts, exactly
+        # as if every retry kept reusing the same wedged socket. Closing
+        # and rebuilding the client forces a genuinely fresh connection.
+        old_client = self._client
+        self._client = httpx.AsyncClient(**self._client_kwargs)
+        # Swap the client in immediately so the next attempt never waits on
+        # this — a genuinely wedged connection could make aclose() itself
+        # hang, which would defeat the whole point of resetting it. Give it
+        # a bounded grace period to shut down cleanly, then abandon it.
+        try:
+            await asyncio.wait_for(old_client.aclose(), timeout=5.0)
+        except (asyncio.TimeoutError, httpx.TransportError):
+            pass
+
+    async def __aenter__(self) -> "OpenRouterClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+    async def chat_completion(
+        self,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float = 0.0,
+        on_retry: RetryCallback | None = None,
+    ) -> tuple[str, int, int]:
+        """Returns (text, prompt_tokens, completion_tokens)."""
+        attempt = 0
+        while True:
+            try:
+                resp = await asyncio.wait_for(
+                    self._client.post(
+                        "/chat/completions",
+                        json={
+                            "model": model,
+                            "messages": messages,
+                            "temperature": temperature,
+                        },
+                    ),
+                    timeout=self._hard_timeout,
+                )
+            except (httpx.TransportError, asyncio.TimeoutError) as exc:
+                attempt += 1
+                if attempt > self.max_retries:
+                    raise OpenRouterError(
+                        f"OpenRouter connection failed after {attempt} attempts: {exc}"
+                    ) from exc
+                await self._reset_connection()
+                await self._backoff(attempt, on_retry, reason=f"connection error: {exc}")
+                continue
+
+            if resp.status_code in RETRYABLE_STATUS_CODES:
+                attempt += 1
+                if attempt > self.max_retries:
+                    raise OpenRouterError(
+                        f"OpenRouter returned HTTP {resp.status_code} after {attempt} attempts: "
+                        f"{resp.text[:500]}"
+                    )
+                await self._backoff(attempt, on_retry, reason=f"HTTP {resp.status_code}")
+                continue
+
+            if resp.status_code >= 400:
+                raise OpenRouterError(
+                    f"OpenRouter request failed: HTTP {resp.status_code}: {resp.text[:500]}"
+                )
+
+            try:
+                data = resp.json()
+            except json.JSONDecodeError as exc:
+                # A 200 status with a truncated/corrupt body — observed in
+                # practice right after flaky-connection retries, i.e. the
+                # same underlying transient network issue, just manifesting
+                # after headers were already sent. Retry like a connection
+                # error rather than crashing the whole batch.
+                attempt += 1
+                if attempt > self.max_retries:
+                    raise OpenRouterError(
+                        f"OpenRouter returned unparseable response after {attempt} attempts: {exc}"
+                    ) from exc
+                await self._reset_connection()
+                await self._backoff(attempt, on_retry, reason=f"malformed response body: {exc}")
+                continue
+            break
+
+        choices = data.get("choices") or []
+        if not choices:
+            raise OpenRouterError(f"OpenRouter response had no choices: {data}")
+        text = choices[0]["message"]["content"]
+        usage = data.get("usage") or {}
+        prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+        return text, prompt_tokens, completion_tokens
+
+    async def _backoff(
+        self, attempt: int, on_retry: RetryCallback | None, reason: str
+    ) -> None:
+        delay = min(2 ** (attempt - 1), 60) + random.uniform(0, 1)
+        if on_retry is not None:
+            on_retry(attempt, reason, delay)
+        await asyncio.sleep(delay)
+
+    async def fetch_pricing(self) -> dict[str, ModelPricing]:
+        if self._pricing_cache is not None:
+            return self._pricing_cache
+        resp = await self._client.get("/models")
+        resp.raise_for_status()
+        data = resp.json()
+
+        pricing: dict[str, ModelPricing] = {}
+        for entry in data.get("data", []):
+            model_id = entry.get("id")
+            price_info = entry.get("pricing") or {}
+            if not model_id:
+                continue
+            try:
+                prompt_price = float(price_info.get("prompt", 0) or 0)
+                completion_price = float(price_info.get("completion", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            pricing[model_id] = ModelPricing(
+                model_id=model_id,
+                prompt_price_per_token=prompt_price,
+                completion_price_per_token=completion_price,
+            )
+        self._pricing_cache = pricing
+        return pricing
+
+    async def get_pricing_for(self, model: str) -> ModelPricing | None:
+        pricing = await self.fetch_pricing()
+        return pricing.get(model)
+
+
+def compute_cost(pricing: ModelPricing | None, prompt_tokens: int, completion_tokens: int) -> float:
+    if pricing is None:
+        return 0.0
+    return (
+        prompt_tokens * pricing.prompt_price_per_token
+        + completion_tokens * pricing.completion_price_per_token
+    )
+
+
+async def run_completion(
+    client: OpenRouterClient,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    pricing: ModelPricing | None,
+    on_retry: RetryCallback | None = None,
+) -> TranslationResult:
+    """Shared call+timing+cost path used by both translate and repair invocations."""
+    start = time.monotonic()
+    text, prompt_tokens, completion_tokens = await client.chat_completion(
+        model, messages, temperature=temperature, on_retry=on_retry
+    )
+    latency = time.monotonic() - start
+    cost = compute_cost(pricing, prompt_tokens, completion_tokens)
+    return TranslationResult(
+        text=text.strip(),
+        model=model,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost_usd=cost,
+        latency_s=latency,
+        cached=False,
+    )

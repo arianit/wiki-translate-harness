@@ -1,0 +1,76 @@
+# Copy to config.yaml and adjust. CLI flags override anything set here.
+# OPENROUTER_API_KEY env var overrides openrouter_api_key set here.
+
+provider: openrouter
+model: deepseek/deepseek-chat-v3-0324
+workers: 4
+temperature: 0
+max_retries: 5
+cache: true
+validate: true
+repair: true
+max_repair_attempts: 2
+
+source_lang: en
+target_lang: sq
+source_wiki_api: https://en.wikipedia.org/w/api.php
+
+chunk_min_tokens: 1500
+chunk_max_tokens: 2500
+
+# Directory containing SKILL.md for the enwiki-sqwiki-translation Pi skill.
+skill_path: ~/.claude/skills/enwiki-sqwiki-translation
+# On: sqwiki-verified.md's confirmed template names/params reach the model.
+# Costs more tokens per request; off falls back to guessing on anything not
+# covered by the harness's own live verification (see wiki_translate_harness/verification.py).
+include_skill_references: true
+# Pin the skill to a committed git revision instead of the working tree, so
+# local uncommitted edits in the skill's own repo don't silently change
+# translation behavior. skill_path must be inside a git working copy of the
+# skill's repo. Set to null (or remove) to read the live working tree instead.
+skill_git_ref: HEAD
+
+output_dir: output
+cache_db_path: cache/translation_memory.sqlite3
+log_dir: logs
+stats_path: stats.json
+
+# openrouter_api_key: sk-or-...   # prefer the OPENROUTER_API_KEY env var instead
+openrouter_base_url: https://openrouter.ai/api/v1
+# Sized for the largest oversized-section chunks (never split further, so a
+# protected table/template can push a single chunk to 10k+ input tokens) —
+# confirmed a real 12k-input/7k-output completion can legitimately take
+# over 5 minutes end to end.
+request_timeout_s: 600
+
+# Required by Wikimedia's User-Agent policy for automated requests to
+# en.wikipedia.org, sq.wikipedia.org, and wikidata.org — an email or URL
+# where the operator of this tool can be reached.
+# (https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)
+wikimedia_tool_name: wiki-translate-harness
+wikimedia_contact: you@example.com
+
+# Harness-side link/template verification against Wikidata + the target
+# wiki (see wiki_translate_harness/verification.py) — the harness's own,
+# growing equivalent of the skill's sqwiki-verified.md, fed into each
+# chunk's translation request as pre-checked facts instead of the model
+# having to guess. Persisted in verification_db_path across runs.
+verify_links: true
+verification_db_path: cache/verified_facts.sqlite3
+wikidata_timeout_s: 20
+verification_timeout_s: 60
+generate_reports: true
+
+# Fills any citation missing |language= in the final assembled article, and
+# renames citation parameter *names* mistranslated into the target language
+# back to English CS1 equivalents (|titulli= -> |title=, etc). Also
+# reconciles {{sfn}}/{{harvnb}} calls whose |ps= quote diverged because the
+# same source citation was split across independently-translated chunks.
+# See wiki_translate_harness/citation_language.py.
+fill_citation_languages: true
+max_citation_url_fetches: 40
+citation_fetch_concurrency: 5
+citation_fetch_timeout_s: 10
+citation_fill_timeout_s: 60
+fix_citation_param_names: true
+dedupe_short_footnotes: true

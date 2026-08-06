@@ -1,0 +1,158 @@
+"""MediaWiki Action API client: raw wikitext fetch only, never rendered HTML."""
+
+from __future__ import annotations
+
+import asyncio
+
+import httpx
+
+from wiki_translate_harness.models import ArticleSource
+
+# Hard, independent backstop for every individual MediaWiki API call —
+# httpx's own `timeout=` on the client has been confirmed, twice, to not
+# reliably fire under real network conditions, hanging the whole batch run
+# indefinitely. Generous enough to never trip on a merely-slow-but-alive
+# request; its only job is to guarantee eventual cancellation when a socket
+# genuinely hangs.
+_HARD_TIMEOUT_MARGIN_S = 30.0
+
+
+class MediaWikiError(Exception):
+    pass
+
+
+def wiki_api_url_for_lang(lang: str) -> str:
+    """Standard Wikipedia language-subdomain API endpoint for a language code."""
+    return f"https://{lang}.wikipedia.org/w/api.php"
+
+
+class MediaWikiClient:
+    def __init__(self, api_url: str, user_agent: str, source_lang: str = "en", timeout: float = 30.0):
+        self.api_url = api_url
+        self.source_lang = source_lang
+        self._hard_timeout = timeout + _HARD_TIMEOUT_MARGIN_S
+        self._client = httpx.AsyncClient(
+            headers={"User-Agent": user_agent},
+            timeout=timeout,
+        )
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def __aenter__(self) -> "MediaWikiClient":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
+
+    async def fetch_article(self, title: str) -> ArticleSource:
+        """Fetch raw wikitext + revid/timestamp for a single title via action=query."""
+        params = {
+            "action": "query",
+            "prop": "revisions",
+            "titles": title,
+            "rvprop": "content|ids|timestamp",
+            "rvslots": "main",
+            "formatversion": "2",
+            "format": "json",
+        }
+        resp = await asyncio.wait_for(
+            self._client.get(self.api_url, params=params), timeout=self._hard_timeout
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        pages = data.get("query", {}).get("pages", [])
+        if not pages:
+            raise MediaWikiError(f"No page data returned for title {title!r}")
+        page = pages[0]
+        if page.get("missing"):
+            raise MediaWikiError(f"Article {title!r} does not exist on {self.api_url}")
+
+        revisions = page.get("revisions")
+        if not revisions:
+            raise MediaWikiError(f"Article {title!r} has no revisions")
+        rev = revisions[0]
+        content = rev.get("slots", {}).get("main", {}).get("content")
+        if content is None:
+            raise MediaWikiError(f"Article {title!r} revision has no wikitext content")
+
+        return ArticleSource(
+            title=page.get("title", title),
+            wikitext=content,
+            revid=rev.get("revid"),
+            revision_timestamp=rev.get("timestamp"),
+            source_lang=self.source_lang,
+        )
+
+    async def fetch_category_members(self, category: str, limit: int = 500) -> list[str]:
+        """List article titles (main namespace only) in a category, following continuation."""
+        cat_title = category if category.startswith("Category:") else f"Category:{category}"
+        titles: list[str] = []
+        cmcontinue: str | None = None
+
+        while True:
+            params: dict[str, str] = {
+                "action": "query",
+                "list": "categorymembers",
+                "cmtitle": cat_title,
+                "cmnamespace": "0",
+                "cmlimit": "500",
+                "format": "json",
+                "formatversion": "2",
+            }
+            if cmcontinue:
+                params["cmcontinue"] = cmcontinue
+
+            resp = await asyncio.wait_for(
+                self._client.get(self.api_url, params=params), timeout=self._hard_timeout
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            members = data.get("query", {}).get("categorymembers", [])
+            titles.extend(m["title"] for m in members)
+
+            if len(titles) >= limit:
+                return titles[:limit]
+
+            cont = data.get("continue", {}).get("cmcontinue")
+            if not cont:
+                break
+            cmcontinue = cont
+
+        return titles
+
+
+class MediaWikiClientPool:
+    """Lazily builds and reuses one MediaWikiClient per source language.
+
+    A single run can mix source languages (see sources.parse_source_ref),
+    so there's no one fixed source wiki to fetch from. `default_lang`'s API
+    endpoint can be overridden (e.g. a non-Wikipedia wiki); every other
+    language resolves generically to https://{lang}.wikipedia.org/w/api.php.
+    """
+
+    def __init__(
+        self,
+        user_agent: str,
+        default_lang: str,
+        default_api_url: str | None = None,
+    ):
+        self._user_agent = user_agent
+        self._default_lang = default_lang
+        self._default_api_url = default_api_url
+        self._clients: dict[str, MediaWikiClient] = {}
+
+    def get(self, lang: str) -> MediaWikiClient:
+        if lang not in self._clients:
+            if lang == self._default_lang and self._default_api_url:
+                api_url = self._default_api_url
+            else:
+                api_url = wiki_api_url_for_lang(lang)
+            self._clients[lang] = MediaWikiClient(api_url, self._user_agent, lang)
+        return self._clients[lang]
+
+    async def aclose(self) -> None:
+        for client in self._clients.values():
+            await client.aclose()

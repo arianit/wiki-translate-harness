@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+config.yaml
+output/
+cache/
+logs/
+quality/
+stats.json
+.pytest_cache/
+.ruff_cache/
+.claude/settings.local.json
