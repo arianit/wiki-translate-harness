@@ -98,6 +98,51 @@ being re-sent to the model. Pass `--force` to re-translate regardless.
 Logs: `logs/run.log` (all activity), `logs/errors.log` (errors only).
 Live counters: `stats.json`, updated after every section.
 
+## Local models
+
+By default translation requests go to OpenRouter. Pass `--provider local` to
+route them instead to any local OpenAI-compatible server — llama.cpp
+server, Ollama, LM Studio, vLLM, etc. — selectable per run, no code change
+needed. Everything else (`--model`, `--workers`, caching, verification,
+post-processing) behaves the same either way; local runs just skip the
+OpenRouter API-key check and always report `$0.00` cost.
+
+For example, this matches a llama.cpp server configured the same way as
+Pi's `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "llama-cpp": {
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "none",
+      "models": [{ "id": "qwen3-8b-q5-k-m" }]
+    }
+  }
+}
+```
+
+Run against it with:
+
+```bash
+wiki-translate-harness --title "Paris" --provider local \
+  --base-url http://127.0.0.1:8080/v1 --model qwen3-8b-q5-k-m
+```
+
+Or make it the default by adding to `config.yaml` instead of passing flags
+every time:
+
+```yaml
+provider: local
+local_base_url: http://127.0.0.1:8080/v1
+local_model: qwen3-8b-q5-k-m
+```
+
+then just run `wiki-translate-harness --title "Paris"` — switch back with
+`--provider openrouter` whenever you want. `local_api_key` can be left unset
+(most local servers, including llama.cpp server, ignore it).
+
 ## Fact verification
 
 The skill's own methodology assumes live tool access (batch Wikidata
