@@ -33,8 +33,10 @@ class OpenRouterClient:
         user_agent: str,
         timeout: float = 120.0,
         max_retries: int = 5,
+        provider: str = "openrouter",
     ):
         self.max_retries = max_retries
+        self.provider = provider
         # Confirmed in practice, twice: httpx's own `timeout=` did not
         # reliably fire under real network conditions (sockets sat in
         # CLOSE-WAIT with unread data for 20+ minutes past the configured
@@ -43,15 +45,19 @@ class OpenRouterClient:
         # — asyncio.wait_for guarantees cancellation regardless of what
         # httpx/the underlying transport is doing.
         self._hard_timeout = timeout + 30.0
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": user_agent,
+        }
+        if provider == "openrouter":
+            # OpenRouter-specific attribution headers; meaningless (and
+            # unwanted) against a local OpenAI-compatible server.
+            headers["HTTP-Referer"] = "https://github.com/arianit/enwiki-sqwiki-translation"
+            headers["X-Title"] = "wiki-translate-harness"
         self._client_kwargs = dict(
             base_url=base_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": user_agent,
-                "HTTP-Referer": "https://github.com/arianit/enwiki-sqwiki-translation",
-                "X-Title": "wiki-translate-harness",
-            },
+            headers=headers,
             timeout=timeout,
         )
         self._client = httpx.AsyncClient(**self._client_kwargs)
@@ -168,6 +174,10 @@ class OpenRouterClient:
         await asyncio.sleep(delay)
 
     async def fetch_pricing(self) -> dict[str, ModelPricing]:
+        if self.provider != "openrouter":
+            # Local servers have no meaningful pricing endpoint; local
+            # inference is treated as free (cost always reports as 0.0).
+            return {}
         if self._pricing_cache is not None:
             return self._pricing_cache
         resp = await self._client.get("/models")

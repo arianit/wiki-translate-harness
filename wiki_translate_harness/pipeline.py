@@ -12,6 +12,7 @@ import logging
 import httpx
 
 from wiki_translate_harness.cache import TranslationCache, VerificationCache
+from wiki_translate_harness.config import resolve_llm_endpoint
 from wiki_translate_harness.citation_language import (
     dedupe_short_footnotes,
     fill_missing_citation_languages,
@@ -109,12 +110,16 @@ async def run_pipeline(
     verification_cache = VerificationCache(config.verification_db_path) if config.verify_links else None
 
     mw_pool = MediaWikiClientPool(config.user_agent, config.source_lang, config.source_wiki_api)
+    base_url, api_key, model = resolve_llm_endpoint(config)
+    if model != config.model:
+        config = config.model_copy(update={"model": model})
     or_client = OpenRouterClient(
-        api_key=config.openrouter_api_key,
-        base_url=config.openrouter_base_url,
+        api_key=api_key,
+        base_url=base_url,
         user_agent=config.user_agent,
         timeout=config.request_timeout_s,
         max_retries=config.max_retries,
+        provider=config.provider,
     )
     wikidata_client = (
         httpx.AsyncClient(headers={"User-Agent": config.user_agent}, timeout=config.wikidata_timeout_s)

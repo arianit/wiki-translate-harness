@@ -260,6 +260,7 @@ async def evaluate_translations(
     openrouter_base_url: str = "https://openrouter.ai/api/v1",
     user_agent: str = "wiki-translate-harness-evaluation",
     timeout: float = 300.0,
+    provider: str = "openrouter",
 ) -> tuple[EvaluationResult | None, str | None]:
     """
     Evaluate translations using a judge model.
@@ -282,6 +283,7 @@ async def evaluate_translations(
         user_agent=user_agent,
         timeout=timeout,
         max_retries=3,
+        provider=provider,
     )
     
     try:

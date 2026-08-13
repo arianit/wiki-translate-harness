@@ -1,6 +1,10 @@
 # Copy to config.yaml and adjust. CLI flags override anything set here.
 # OPENROUTER_API_KEY env var overrides openrouter_api_key set here.
+# LOCAL_API_KEY env var overrides local_api_key set here.
 
+# provider: openrouter (default, cloud) or local (any OpenAI-compatible
+# server: llama.cpp server, Ollama, LM Studio, vLLM, ...). Override per run
+# with `--provider local`; --model and --workers work the same either way.
 provider: openrouter
 model: deepseek/deepseek-chat-v3-0324
 workers: 4
@@ -37,6 +41,15 @@ stats_path: stats.json
 
 # openrouter_api_key: sk-or-...   # prefer the OPENROUTER_API_KEY env var instead
 openrouter_base_url: https://openrouter.ai/api/v1
+
+# Used only when provider: local. Default matches llama.cpp server's
+# OpenAI-compatible endpoint (`llama-server -m model.gguf --port 8080`);
+# change to point at Ollama (http://localhost:11434/v1), LM Studio
+# (http://localhost:1234/v1), vLLM, etc. Most local servers ignore
+# local_api_key; some require any non-empty string.
+# local_base_url: http://localhost:8080/v1
+# local_api_key: local
+# local_model: llama-3.1-8b-instruct   # falls back to `model` if unset
 # Sized for the largest oversized-section chunks (never split further, so a
 # protected table/template can push a single chunk to 10k+ input tokens) —
 # confirmed a real 12k-input/7k-output completion can legitimately take

@@ -12,6 +12,7 @@ from pathlib import Path
 import orjson
 
 from wiki_translate_harness.cache import TranslationCache
+from wiki_translate_harness.config import resolve_llm_endpoint
 from wiki_translate_harness.mediawiki import MediaWikiClient, wiki_api_url_for_lang
 from wiki_translate_harness.models import ChunkStatus, Config
 from wiki_translate_harness.openrouter import OpenRouterClient, OpenRouterError
@@ -63,12 +64,14 @@ async def run_benchmark(
 
     for model in models:
         model_config = base_config.model_copy(update={"model": model})
+        base_url, api_key, _ = resolve_llm_endpoint(model_config)
         or_client = OpenRouterClient(
-            api_key=model_config.openrouter_api_key,
-            base_url=model_config.openrouter_base_url,
+            api_key=api_key,
+            base_url=base_url,
             user_agent=model_config.user_agent,
             timeout=model_config.request_timeout_s,
             max_retries=model_config.max_retries,
+            provider=model_config.provider,
         )
         try:
             pricing = await or_client.get_pricing_for(model)

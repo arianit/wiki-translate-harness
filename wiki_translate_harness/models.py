@@ -218,6 +218,13 @@ class Config(BaseModel):
 
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    # Local OpenAI-compatible server (llama.cpp server, Ollama, LM Studio,
+    # vLLM, ...) as an alternative to OpenRouter. Selected via provider: local.
+    local_base_url: str = "http://localhost:8080/v1"
+    local_api_key: str | None = None
+    # Falls back to `model` when unset, so --model keeps working for local too.
+    local_model: str | None = None
     # Sized for the largest oversized-section chunks (never split further,
     # so a protected table/template can push a single chunk to 10k+ input
     # tokens). Confirmed directly against the raw API (bypassing this
@@ -237,6 +244,13 @@ class Config(BaseModel):
     user_agent: str | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, populate_by_name=True)
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, v: str) -> str:
+        if v not in ("openrouter", "local"):
+            raise ValueError(f"provider must be 'openrouter' or 'local', got {v!r}")
+        return v
 
     @field_validator(
         "skill_path",

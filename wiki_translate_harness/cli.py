@@ -38,6 +38,8 @@ def _build_overrides(
     cache: Optional[bool],
     validate: Optional[bool],
     repair: Optional[bool],
+    provider: Optional[str] = None,
+    base_url: Optional[str] = None,
 ) -> dict:
     overrides = {
         "model": model,
@@ -47,8 +49,15 @@ def _build_overrides(
         "cache": cache,
         "validate": validate,
         "repair": repair,
+        "provider": provider,
     }
-    return {k: v for k, v in overrides.items() if v is not None}
+    overrides = {k: v for k, v in overrides.items() if v is not None}
+    if base_url is not None:
+        # Applies to whichever provider ends up active for this run.
+        effective_provider = provider or "openrouter"
+        key = "local_base_url" if effective_provider == "local" else "openrouter_base_url"
+        overrides[key] = base_url
+    return overrides
 
 
 @app.callback(invoke_without_command=True)
@@ -65,7 +74,15 @@ def main(
     ),
     file: Optional[Path] = typer.Option(None, "--file", help="Local .wiki/.txt file with raw source wikitext"),
     directory: Optional[Path] = typer.Option(None, "--directory", help="Directory of local .wiki/.txt files"),
-    model: Optional[str] = typer.Option(None, "--model", help="OpenRouter model id, e.g. deepseek/deepseek-v3"),
+    model: Optional[str] = typer.Option(
+        None, "--model", help="Model id, e.g. deepseek/deepseek-v3 (OpenRouter) or a local model name"
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="'openrouter' (default) or 'local' (any OpenAI-compatible server)"
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="Override the active provider's base URL (pair with --provider local)"
+    ),
     workers: Optional[int] = typer.Option(None, "--workers", help="Concurrent section-translation workers"),
     temperature: Optional[float] = typer.Option(None, "--temperature"),
     max_retries: Optional[int] = typer.Option(None, "--max-retries"),
@@ -82,7 +99,9 @@ def main(
         console.print(ctx.get_help())
         raise typer.Exit(code=1)
 
-    overrides = _build_overrides(model, workers, temperature, max_retries, cache, validate, repair)
+    overrides = _build_overrides(
+        model, workers, temperature, max_retries, cache, validate, repair, provider, base_url
+    )
     cfg = build_config(config_path, overrides)
 
     logger = setup_logging(cfg.log_dir)
@@ -108,8 +127,9 @@ def main(
             inputs.extend(ArticleInput(title=t, source_lang=effective_lang) for t in member_titles)
 
         logger.info(
-            "Starting run: %d article(s) requested, model=%s, workers=%d",
+            "Starting run: %d article(s) requested, provider=%s, model=%s, workers=%d",
             len(inputs),
+            cfg.provider,
             cfg.model,
             cfg.workers,
         )
