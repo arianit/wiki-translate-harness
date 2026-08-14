@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import httpx
 
@@ -35,6 +36,10 @@ from wiki_translate_harness.validator import format_errors, validate_wikitext
 from wiki_translate_harness.verification import VerifiedFacts, verify_wikitext
 
 logger = logging.getLogger("wiki_translate_harness.pipeline")
+
+
+class ArticleLimitExceeded(Exception):
+    pass
 
 # Bounds concurrent MediaWiki fetches during the planning phase. Not the same
 # knob as `workers` (which bounds concurrent OpenRouter translation calls) —
@@ -186,67 +191,126 @@ async def run_pipeline(
             if reporter is not None:
                 reporter.on_retry(config.model, attempt, reason, delay)
 
-        async def process_chunk(chunk: Chunk, facts: VerifiedFacts) -> None:
-            slot_id = await slot_queue.get()
-            try:
-                if reporter is not None:
-                    reporter.on_chunk_start(slot_id, chunk.article_title, chunk.section_title)
-                try:
-                    outcome = await translate_chunk(
-                        chunk,
-                        config,
-                        or_client,
-                        skill,
-                        cache,
-                        pricing,
-                        stats,
-                        on_retry=on_retry,
-                        verified_facts=facts,
-                    )
-                except OpenRouterError as exc:
-                    chunk.status = ChunkStatus.FAILED
-                    logger.error(
-                        "OpenRouter call failed for %s chunk %d: %s", chunk.article_title, chunk.order, exc
-                    )
-                    return
-                if not outcome.validation.valid:
-                    logger.error(
-                        "Validation failed for %s chunk %d after repair attempts: %s",
-                        chunk.article_title,
-                        chunk.order,
-                        "; ".join(format_errors(outcome.validation)),
-                    )
-            finally:
-                if reporter is not None:
-                    reporter.on_chunk_done(slot_id)
-                slot_queue.put_nowait(slot_id)
-                stats_tracker.write(config.stats_path)
-
         async def process_article(source: ArticleSource, chunks: list[Chunk], facts: VerifiedFacts) -> None:
-            await asyncio.gather(*(process_chunk(c, facts) for c in chunks))
+            article_stats = {
+                'input_tokens': 0,
+                'output_tokens': 0,
+                'start_time': time.monotonic(),
+                'chunks_done': 0,
+                'failed': False,
+                'limit_exceeded': False,
+            }
 
-            failed = [c for c in chunks if c.status == ChunkStatus.FAILED]
-            if failed:
+            async def process_chunk(chunk: Chunk, facts: VerifiedFacts) -> None:
+                slot_id = await slot_queue.get()
+                try:
+                    if reporter is not None:
+                        reporter.on_chunk_start(slot_id, chunk.article_title, chunk.section_title)
+                    try:
+                        outcome = await translate_chunk(
+                            chunk,
+                            config,
+                            or_client,
+                            skill,
+                            cache,
+                            pricing,
+                            stats,
+                            on_retry=on_retry,
+                            verified_facts=facts,
+                        )
+                    except OpenRouterError as exc:
+                        chunk.status = ChunkStatus.FAILED
+                        logger.error(
+                            "OpenRouter call failed for %s chunk %d: %s", chunk.article_title, chunk.order, exc
+                        )
+                        article_stats['failed'] = True
+                        return
+                    if not outcome.validation.valid:
+                        logger.error(
+                            "Validation failed for %s chunk %d after repair attempts: %s",
+                            chunk.article_title,
+                            chunk.order,
+                            "; ".join(format_errors(outcome.validation)),
+                        )
+                        article_stats['failed'] = True
+                        return
+                    # Update article stats
+                    article_stats['input_tokens'] += outcome.prompt_tokens
+                    article_stats['output_tokens'] += outcome.completion_tokens
+                    article_stats['chunks_done'] += 1
+                    # Check token ratio limit
+                    if config.max_token_ratio > 0 and article_stats['input_tokens'] > 0:
+                        ratio = article_stats['output_tokens'] / article_stats['input_tokens']
+                        if ratio > config.max_token_ratio:
+                            logger.error(
+                                "Article %r token ratio exceeded: output/input = %.2f > %.2f",
+                                source.title, ratio, config.max_token_ratio
+                            )
+                            article_stats['limit_exceeded'] = True
+                            raise ArticleLimitExceeded(f"Token ratio {ratio:.2f} exceeds limit {config.max_token_ratio}")
+                    # Check total token limit
+                    if config.max_article_tokens > 0:
+                        total_tokens = article_stats['input_tokens'] + article_stats['output_tokens']
+                        if total_tokens > config.max_article_tokens:
+                            logger.error(
+                                "Article %r total tokens exceeded: %d > %d",
+                                source.title, total_tokens, config.max_article_tokens
+                            )
+                            article_stats['limit_exceeded'] = True
+                            raise ArticleLimitExceeded(f"Total tokens {total_tokens} exceeds limit {config.max_article_tokens}")
+                finally:
+                    if reporter is not None:
+                        reporter.on_chunk_done(slot_id)
+                    slot_queue.put_nowait(slot_id)
+                    stats_tracker.write(config.stats_path)
+
+            # Execute chunk translation with overall article timeout
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(process_chunk(c, facts) for c in chunks)),
+                    timeout=config.article_timeout_s,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Article %r translation timed out after %.1f seconds",
+                    source.title, config.article_timeout_s
+                )
+                # Mark remaining pending chunks as failed
+                for c in chunks:
+                    if c.status == ChunkStatus.PENDING:
+                        c.status = ChunkStatus.FAILED
+                article_stats['failed'] = True
+            except ArticleLimitExceeded:
+                # Already logged, mark remaining chunks as failed
+                for c in chunks:
+                    if c.status == ChunkStatus.PENDING:
+                        c.status = ChunkStatus.FAILED
+                article_stats['failed'] = True
+            except Exception as exc:
+                logger.error("Unexpected error processing article %r: %s", source.title, exc)
+                article_stats['failed'] = True
+                for c in chunks:
+                    if c.status == ChunkStatus.PENDING:
+                        c.status = ChunkStatus.FAILED
+
+            # Determine article outcome
+            failed_chunks = [c for c in chunks if c.status == ChunkStatus.FAILED]
+            if failed_chunks or article_stats['failed']:
                 stats.articles_failed += 1
                 logger.error(
-                    "Article %r failed: %d of %d sections failed validation",
-                    source.title,
-                    len(failed),
-                    len(chunks),
+                    "Article %r failed: %d of %d sections failed",
+                    source.title, len(failed_chunks), len(chunks)
                 )
                 if reporter is not None:
                     reporter.on_article_done()
                 return
 
+            # All chunks succeeded, proceed with assembly and post-processing
             assembled = assemble_chunks(chunks)
 
             citation_languages_filled: dict[str, str] = {}
             if citation_client is not None:
                 try:
-                    # Same hard-deadline reasoning as verification above:
-                    # this is an optional enhancement over citations the
-                    # model already produced, and must never be able to
-                    # stall the whole run if a fetch hangs indefinitely.
                     citation_result = await asyncio.wait_for(
                         fill_missing_citation_languages(
                             assembled,
@@ -270,12 +334,6 @@ async def run_pipeline(
                     logger.warning("Citation language fill failed for %r: %s", source.title, exc)
 
             if config.fix_citation_param_names:
-                # Deterministic backstop for the model mistranslating CS1
-                # citation parameter *names* into the target language
-                # (confirmed in practice: |date=/|title=/|website=/
-                # |access-date= all renamed to Albanian on one citation in
-                # a citation-dense article, silently dropping those fields
-                # on render). Synchronous, no I/O — no timeout needed.
                 try:
                     param_fix_result = fix_citation_param_names(assembled)
                     assembled = param_fix_result.patched_wikitext
@@ -289,8 +347,7 @@ async def run_pipeline(
                 except Exception as exc:
                     logger.warning("Citation parameter name fix failed for %r: %s", source.title, exc)
 
-            # Fix sfn/harvnb parameter names mistranslated into Albanian
-            # (|f= -> |p=, |ff= -> |pp=, positional "f. 161" -> |p=161).
+            # Fix sfn/harvnb parameter names
             try:
                 sfn_fix_result = fix_sfn_param_names(assembled)
                 assembled = sfn_fix_result.patched_wikitext
@@ -305,12 +362,6 @@ async def run_pipeline(
                 logger.warning("Sfn parameter name fix failed for %r: %s", source.title, exc)
 
             if config.dedupe_short_footnotes:
-                # The same source citation split across independently
-                # -translated chunks can come back with its |ps= quote
-                # paraphrased slightly differently each time, which breaks
-                # {{sfn}}/{{harvnb}}'s shared auto-generated anchor
-                # (MediaWiki requires byte-identical content across all
-                # uses of that anchor). Synchronous, no I/O.
                 try:
                     dedupe_result = dedupe_short_footnotes(assembled)
                     assembled = dedupe_result.patched_wikitext
@@ -335,10 +386,10 @@ async def run_pipeline(
                     reporter.on_article_done()
                 return
 
-            # Add attribution block as HTML comment at the top of the file
+            # Add attribution block as HTML comment at the bottom of the file
             attribution = build_attribution_block(source)
             if attribution:
-                assembled = f"<!--\n{attribution}\n-->\n\n{assembled}"
+                assembled = f"{assembled}\n\n{attribution}"
             
             path = save_article(config.output_dir, source.title, assembled)
             stats.articles_completed += 1

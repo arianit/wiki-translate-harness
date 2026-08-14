@@ -107,8 +107,8 @@ def test_report_no_repair_section_when_nothing_repaired():
 def test_report_includes_attribution_facts():
     data = ArticleReportData(source=_source(), chunks=[_chunk()], facts=VerifiedFacts())
     report = build_article_report(data, "text")
-    assert "Attribution reminder" in report
-    assert "Talk page" in report
+    assert "Për faqen e diskutimit" in report
+    assert "Përmbledhja e redaktimit" in report
     assert "Përkthyer nga" in report
 
 

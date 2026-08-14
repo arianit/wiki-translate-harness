@@ -24,6 +24,9 @@ class ChunkOutcome:
     validation: ValidationResult
     from_cache: bool
     repair_attempts: int
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_s: float = 0.0
 
 
 def _accumulate(stats: RunStats, result: TranslationResult) -> None:
@@ -57,7 +60,7 @@ async def translate_chunk(
         chunk.translated_text = cached_text
         chunk.status = ChunkStatus.CACHED
         validation = validate_wikitext(cached_text) if config.validate_output else ValidationResult(valid=True)
-        return ChunkOutcome(chunk=chunk, validation=validation, from_cache=True, repair_attempts=0)
+        return ChunkOutcome(chunk=chunk, validation=validation, from_cache=True, repair_attempts=0, prompt_tokens=0, completion_tokens=0, latency_s=0.0)
 
     stats.cache_misses += 1
 
@@ -72,6 +75,9 @@ async def translate_chunk(
     )
     result = await run_completion(client, config.model, messages, config.temperature, pricing, on_retry=on_retry)
     _accumulate(stats, result)
+    total_prompt_tokens = result.prompt_tokens
+    total_completion_tokens = result.completion_tokens
+    total_latency = result.latency_s
 
     translated_text = result.text
     validation = ValidationResult(valid=True)
@@ -98,6 +104,9 @@ async def translate_chunk(
                 on_retry=on_retry,
             )
             _accumulate(stats, repair_result)
+            total_prompt_tokens += repair_result.prompt_tokens
+            total_completion_tokens += repair_result.completion_tokens
+            total_latency += repair_result.latency_s
             translated_text = repair_result.text
             validation = validate_wikitext(translated_text)
 
@@ -122,4 +131,4 @@ async def translate_chunk(
 
     stats.sections_translated += 1
 
-    return ChunkOutcome(chunk=chunk, validation=validation, from_cache=False, repair_attempts=repair_attempts)
+    return ChunkOutcome(chunk=chunk, validation=validation, from_cache=False, repair_attempts=repair_attempts, prompt_tokens=total_prompt_tokens, completion_tokens=total_completion_tokens, latency_s=total_latency)

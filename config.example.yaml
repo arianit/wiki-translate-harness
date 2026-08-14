@@ -87,3 +87,17 @@ citation_fetch_timeout_s: 10
 citation_fill_timeout_s: 60
 fix_citation_param_names: true
 dedupe_short_footnotes: true
+
+# Article-level limits to skip articles that take too long or consume too many tokens.
+# Timeout for translation phase only (fetching, verification, and post‑processing are
+# separately bounded by request_timeout_s, verification_timeout_s, citation_fill_timeout_s).
+article_timeout_s: 1800  # 30 minutes per article
+
+# Maximum allowed ratio of output tokens to input tokens per article.
+# A ratio > 1 is expected (translation often expands text), but extremely high ratios
+# suggest a runaway generation (e.g., the model started repeating or hallucinating).
+# Set to 0 to disable.
+max_token_ratio: 5.0
+
+# Maximum total tokens (input + output) allowed per article. Zero means unlimited.
+max_article_tokens: 0

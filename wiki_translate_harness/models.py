@@ -216,6 +216,19 @@ class Config(BaseModel):
     # across independently-translated chunks. See citation_language.py.
     dedupe_short_footnotes: bool = True
 
+    # Maximum allowed time (seconds) to spend translating a single article (excluding
+    # verification and post-processing). If translation exceeds this limit, the article is
+    # marked as failed and the harness moves on to the next article.
+    article_timeout_s: float = 1800.0  # 30 minutes
+
+    # Maximum allowed ratio of output tokens to input tokens per article.
+    # A ratio > 1 is expected (translation often expands text), but extremely high ratios
+    # suggest a runaway generation (e.g., the model started repeating or hallucinating).
+    max_token_ratio: float = 5.0
+
+    # Maximum total tokens (input + output) allowed per article. Zero means unlimited.
+    max_article_tokens: int = 0
+
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 

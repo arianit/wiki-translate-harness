@@ -49,11 +49,14 @@ def build_attribution_block(source: ArticleSource) -> str | None:
     if not albanian_date:
         return None
     return (
+        "<!--\n"
+        "NUK ËSHTË PJESË E ARTIKULLIT — mos e kopjo këtë bllok në faqen kryesore.\n\n"
+        "== Për faqen e diskutimit (Talk) ==\n"
+        f"{{{{Përkthyer nga|en|{source.title}|{albanian_date}|{source.revid}}}}}\n\n"
         "== Përmbledhja e redaktimit ==\n"
         f"Përkthyer nga anglishtja, sipas artikullit en:{source.title}, "
-        f"versioni i datës {albanian_date} (revizioni {source.revid})\n\n"
-        "== Për faqen e diskutimit (Talk) ==\n"
-        f"{{{{Përkthyer nga|en|{source.title}|{albanian_date}|{source.revid}}}}}"
+        f"versioni i datës {albanian_date} (revizioni {source.revid}).\n"
+        "-->"
     )
 
 
