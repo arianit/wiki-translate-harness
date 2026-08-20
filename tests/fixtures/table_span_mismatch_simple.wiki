@@ -1,0 +1,8 @@
+{| class="wikitable"
+|-
+! Viti !! Ngjarja !! Faqja
+|-
+| 1990 || Fillimi i luftës
+|-
+| 1995 || Fundi i luftës || fq. 12
+|}

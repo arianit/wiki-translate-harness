@@ -1,4 +1,12 @@
+from pathlib import Path
+
 from wiki_translate_harness.validator import format_errors, validate_wikitext
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _load_fixture(name: str) -> str:
+    return (_FIXTURES / name).read_text(encoding="utf-8")
 
 
 def test_valid_wikitext_passes():
@@ -118,6 +126,72 @@ def test_degenerate_repetition_loop_detected():
     result = validate_wikitext(text)
     assert not result.valid
     assert any(i.kind == "degenerate_repetition" for i in result.issues)
+
+
+def test_fixture_convert_malformed_detected():
+    result = validate_wikitext(_load_fixture("convert_malformed.wiki"))
+    assert not result.valid
+    issue = next(i for i in result.issues if i.kind == "convert_malformed")
+    assert issue.severity == "error"
+    assert issue.line_number == 1
+    assert "{{convert" in issue.snippet
+
+
+def test_fixture_harvc_used_detected():
+    result = validate_wikitext(_load_fixture("harvc_used.wiki"))
+    assert not result.valid
+    issue = next(i for i in result.issues if i.kind == "harvc_used")
+    assert issue.severity == "error"
+    assert issue.line_number == 3
+
+
+def test_fixture_sfn_text_param_detected():
+    result = validate_wikitext(_load_fixture("sfn_text_param.wiki"))
+    assert not result.valid
+    issue = next(i for i in result.issues if i.kind == "sfn_unsupported_param")
+    assert issue.severity == "warning"
+    assert issue.line_number == 1
+
+
+def test_fixture_table_span_mismatch_simple_detected():
+    result = validate_wikitext(_load_fixture("table_span_mismatch_simple.wiki"))
+    assert not result.valid
+    issue = next(i for i in result.issues if i.kind == "table_span_mismatch")
+    assert issue.severity == "warning"
+    assert "1990" in issue.snippet
+
+
+def test_fixture_table_span_mismatch_rowspan_detected():
+    # Row 3 ("| Beta") relies on the rowspan="2" cell above it for column 1
+    # but is missing its own column-3 value — a mismatch a naive per-row
+    # cell count wouldn't catch without honoring the active rowspan.
+    result = validate_wikitext(_load_fixture("table_span_mismatch_rowspan.wiki"))
+    assert not result.valid
+    issue = next(i for i in result.issues if i.kind == "table_span_mismatch")
+    assert "Beta" in issue.snippet
+
+
+def test_fixture_table_span_ok_rowspan_not_flagged():
+    # Same rowspan shape as the mismatch fixture, but every row's cell count
+    # correctly accounts for the carried-down rowspan — must not false-positive.
+    result = validate_wikitext(_load_fixture("table_span_ok_rowspan.wiki"))
+    assert result.valid
+
+
+def test_fixture_clean_valid_has_no_issues():
+    # Ordinary sqwiki prose using convert/Sfn/a table correctly — the four
+    # new checks must not false-positive on legitimate usage.
+    result = validate_wikitext(_load_fixture("clean_valid.wiki"))
+    assert result.valid
+    assert result.issues == []
+
+
+def test_as_finding_shape():
+    result = validate_wikitext(_load_fixture("harvc_used.wiki"))
+    finding = result.issues[0].as_finding()
+    assert set(finding.keys()) == {"severity", "line_number", "snippet", "explanation"}
+    assert finding["severity"] == "error"
+    assert isinstance(finding["explanation"], str) and finding["explanation"]
 
 
 def test_normal_long_prose_not_flagged_as_degenerate_repetition():

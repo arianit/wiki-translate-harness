@@ -1,0 +1,15 @@
+== Historia ==
+'''Bardhyli''' ishte një mbret ilir i shekullit IV p.e.s.{{Sfn|Smith|2020|p=45}} Ai qeverisi mbretërinë Dardane.{{convert|500|km2|sqmi}}
+
+== Tabela ==
+{| class="wikitable"
+|-
+! Viti !! Ngjarja
+|-
+| 358 p.e.s. || Beteja e parë
+|-
+| 356 p.e.s. || Beteja e dytë
+|}
+
+== Referime ==
+{{Reflist}}

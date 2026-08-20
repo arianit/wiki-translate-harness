@@ -22,6 +22,17 @@ _REF_OPEN_RE = re.compile(r"<ref\b[^>]*>", re.IGNORECASE)
 _REF_CLOSE_RE = re.compile(r"</ref\s*>", re.IGNORECASE)
 _HEADING_LIKE_RE = re.compile(r"(={2,6})([^\n=]+)\1[ \t]*(?=\n|$)")
 
+_SNIPPET_MAX = 120
+
+
+def _line_number(text: str, offset: int) -> int:
+    return text.count("\n", 0, offset) + 1
+
+
+def _snippet(s: str) -> str:
+    s = s.strip().replace("\n", " ")
+    return s if len(s) <= _SNIPPET_MAX else s[: _SNIPPET_MAX - 1] + "…"
+
 # Confirmed in practice, twice: a chunk given little or no real source
 # content (see the parser.py fix for the near-empty-trailing-chunk case
 # that caused this) didn't just echo back what little it had — the model
@@ -136,6 +147,164 @@ def _check_degenerate_repetition(text: str, issues: list[ValidationIssue]) -> No
         )
 
 
+_CONVERT_NUMERIC_RE = re.compile(r"^[\d.,\-–—/±\s]+$")
+_SFN_FAMILY = {"sfn", "sfnp", "sfnm"}
+
+
+def _check_template_based_issues(text: str, issues: list[ValidationIssue]) -> None:
+    """One pass over the template tree for every mwparserfromhell-based
+    check, sharing a single left-to-right search cursor so repeated,
+    byte-identical templates each resolve to their own (not the first
+    occurrence's) line number."""
+    cursor = 0
+    for template in mwp.parse(text).filter_templates():
+        raw = str(template)
+        offset = text.find(raw, cursor)
+        if offset == -1:
+            offset = text.find(raw)  # fallback: template inside a template, out of order
+        if offset != -1:
+            cursor = offset + 1
+        line = _line_number(text, offset) if offset != -1 else None
+        name = template.name.strip().lower()
+
+        if name == "convert" and template.params:
+            first_val = template.params[0].value.strip()
+            if first_val and not _CONVERT_NUMERIC_RE.match(first_val):
+                issues.append(
+                    ValidationIssue(
+                        kind="convert_malformed",
+                        message=f"{{{{convert}}}} first argument {first_val!r} is not numeric",
+                        line_number=line,
+                        snippet=_snippet(raw),
+                    )
+                )
+
+        elif name == "harvc":
+            issues.append(
+                ValidationIssue(
+                    kind="harvc_used",
+                    message="{{harvc}} is broken on sqwiki (Moduli:Harvc is missing) — "
+                    "expand into a standalone {{Cite book}} instead",
+                    line_number=line,
+                    snippet=_snippet(raw),
+                )
+            )
+
+        elif name in _SFN_FAMILY and template.has("text"):
+            issues.append(
+                ValidationIssue(
+                    kind="sfn_unsupported_param",
+                    message=f"{{{{{template.name.strip()}}}}} uses unsupported parameter |text= on sqwiki",
+                    severity="warning",
+                    line_number=line,
+                    snippet=_snippet(raw),
+                )
+            )
+
+
+# Rowspan/colspan validation from raw wikitext (no real MediaWiki renderer
+# available here) is inherently heuristic. This deliberately favors false
+# negatives over false positives: any table it can't parse with confidence
+# (nested tables, cells it can't cleanly split) is skipped rather than
+# guessed at.
+_TABLE_RE = re.compile(r"^\{\|.*?^\|\}", re.DOTALL | re.MULTILINE)
+_CELL_ATTR_RE = re.compile(r"^((?:[a-zA-Z-]+\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s|]+)\s*)+)\|(?!\|)")
+_ROWSPAN_RE = re.compile(r"rowspan\s*=\s*\"?(\d+)\"?", re.IGNORECASE)
+_COLSPAN_RE = re.compile(r"colspan\s*=\s*\"?(\d+)\"?", re.IGNORECASE)
+
+
+def _cell_span(cell_text: str) -> tuple[int, int]:
+    match = _CELL_ATTR_RE.match(cell_text.strip())
+    if not match:
+        return 1, 1
+    attrs = match.group(1)
+    rowspan = _ROWSPAN_RE.search(attrs)
+    colspan = _COLSPAN_RE.search(attrs)
+    return (int(rowspan.group(1)) if rowspan else 1, int(colspan.group(1)) if colspan else 1)
+
+
+def _parse_table_rows(block: str) -> list[tuple[int, list[tuple[int, int]]]] | None:
+    """Returns [(line_offset_within_block, [(rowspan, colspan), ...]), ...]
+    for each data/header row, or None if the block isn't confidently
+    parseable (e.g. contains a nested table)."""
+    if block.count("{|") > 1:
+        return None
+    rows: list[tuple[int, list[tuple[int, int]]]] = []
+    current_cells: list[tuple[int, int]] = []
+    current_row_offset = 0
+    row_offset_set = False  # points at the first content line, not the |- delimiter
+    in_row = False
+    offset = 0
+    for line in block.split("\n"):
+        stripped = line.rstrip()
+        if stripped.startswith("|-"):
+            if in_row:
+                rows.append((current_row_offset, current_cells))
+            current_cells = []
+            current_row_offset = offset
+            row_offset_set = False
+            in_row = True
+        elif stripped.startswith("|}"):
+            if in_row:
+                rows.append((current_row_offset, current_cells))
+            in_row = False
+        elif in_row and stripped and not stripped.startswith("|+"):
+            if stripped.startswith("!"):
+                segments = re.split(r"!!", stripped[1:])
+            elif stripped.startswith("|"):
+                segments = re.split(r"\|\|", stripped[1:])
+            else:
+                segments = None
+            if segments is not None:
+                if not row_offset_set:
+                    current_row_offset = offset
+                    row_offset_set = True
+                current_cells.extend(_cell_span(seg) for seg in segments)
+        offset += len(line) + 1
+    return rows
+
+
+def _check_table_span_mismatches(text: str, issues: list[ValidationIssue]) -> None:
+    for table_match in _TABLE_RE.finditer(text):
+        block = table_match.group(0)
+        rows = _parse_table_rows(block)
+        if rows is None or len(rows) < 2:
+            continue
+
+        active_rowspans: list[tuple[int, int]] = []  # (remaining_rows, colspan)
+        widths: list[int] = []
+        for _, cells in rows:
+            width = sum(colspan for _, colspan in active_rowspans) + sum(cs for _, cs in cells)
+            widths.append(width)
+            active_rowspans = [(remaining - 1, colspan) for remaining, colspan in active_rowspans if remaining - 1 > 0]
+            active_rowspans.extend((rowspan - 1, colspan) for rowspan, colspan in cells if rowspan > 1)
+
+        width_counts: dict[int, int] = {}
+        for w in widths:
+            width_counts[w] = width_counts.get(w, 0) + 1
+        if len(width_counts) <= 1:
+            continue
+        expected_width = max(width_counts.items(), key=lambda kv: kv[1])[0]
+
+        for (row_offset, _), width in zip(rows, widths):
+            if width != expected_width:
+                abs_offset = table_match.start() + row_offset
+                line_end = block.find("\n", row_offset)
+                row_text = block[row_offset : line_end if line_end != -1 else None]
+                issues.append(
+                    ValidationIssue(
+                        kind="table_span_mismatch",
+                        message=(
+                            f"Table row has effective width {width} (columns, honoring "
+                            f"rowspan/colspan), expected {expected_width} to match the rest of the table"
+                        ),
+                        severity="warning",
+                        line_number=_line_number(text, abs_offset),
+                        snippet=_snippet(row_text),
+                    )
+                )
+
+
 def validate_wikitext(text: str) -> ValidationResult:
     issues: list[ValidationIssue] = []
 
@@ -154,6 +323,8 @@ def validate_wikitext(text: str) -> ValidationResult:
     _check_pair(text, "<!--", "-->", "comment", issues)
     _check_refs(text, issues)
     _check_headings_at_line_start(text, issues)
+    _check_template_based_issues(text, issues)
+    _check_table_span_mismatches(text, issues)
 
     return ValidationResult(valid=len(issues) == 0, issues=issues)
 

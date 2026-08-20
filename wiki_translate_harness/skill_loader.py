@@ -1,4 +1,4 @@
-"""Loads the Pi translation skill and turns it into an LLM request.
+"""Loads the Pi translation skill(s) and turns them into an LLM request.
 
 This is the harness's *only* bridge to translation judgment. The harness
 itself contributes no translation guidance — it reads the skill's own
@@ -9,16 +9,24 @@ reads the working tree on disk; if `skill_git_ref` is configured (e.g.
 local uncommitted edits to the skill's own repo can't silently change
 translation behavior underneath the harness.
 
-The skill (github.com/arianit/enwiki-sqwiki-translation) was written to be
-followed by an interactive agent with shell/tool access (curl, grep, Write) —
-it fetches its own sources, batch-verifies links against Wikidata, checks
-nearby sqwiki articles, etc. A single OpenRouter chat-completion call has
-none of that: no tools, no internet, one isolated section at a time. The
-small "invocation frame" below exists solely to tell the model what context
-it is running in and what to skip — it carries no opinion about *how* to
-translate. All translation judgment (grammar, terminology, conventions,
-what to link, how to transliterate) still comes entirely from the skill
-text itself.
+The skill (github.com/arianit/enwiki-sqwiki-translation) is split across
+three directories — enwiki-sqwiki-translation (translate), wikiterms
+(terminology/link verification), wikiqa (pre-delivery checklist) — that
+were written to be followed by an interactive agent with shell/tool access
+(curl, grep, Write) and to invoke each other via a Skill tool: it fetches
+its own sources, batch-verifies links against Wikidata, checks nearby
+sqwiki articles, etc. A single OpenRouter chat-completion call has none of
+that: no tools, no internet, no Skill tool, one isolated section at a
+time. `skill_path` therefore accepts either one directory or a list of
+directories; when it's a list, each directory's SKILL.md (and, if
+`include_references` is set, its `references/*.md` files) are concatenated
+in the given order, so the model sees the combined content of all three
+skills in one system prompt instead of being able to invoke them on
+demand. The small "invocation frame" below exists solely to tell the model
+what context it is running in and what to skip — it carries no opinion
+about *how* to translate. All translation judgment (grammar, terminology,
+conventions, what to link, how to transliterate) still comes entirely from
+the skill text itself.
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -140,69 +149,112 @@ def _git_root_and_prefix(skill_path: Path) -> tuple[Path, str]:
     return Path(root), prefix
 
 
+def _normalize_skill_paths(skill_path: Path | str | Sequence[Path | str]) -> list[Path]:
+    """A single directory is the common case; a list lets skill_path span
+    multiple skill directories (e.g. translate + wikiterms + wikiqa) that
+    get concatenated into one system prompt, since this harness has no
+    Skill-tool equivalent to invoke them on demand at runtime."""
+    if isinstance(skill_path, (str, Path)):
+        return [Path(skill_path)]
+    return [Path(p) for p in skill_path]
+
+
 def _load_skill_from_git(
-    skill_path: Path, git_ref: str, include_references: bool
+    skill_paths: Sequence[Path], git_ref: str, include_references: bool
 ) -> SkillContent:
-    root, prefix = _git_root_and_prefix(skill_path)
-
-    try:
-        raw_skill_md = _run_git(["git", "-C", str(root), "show", f"{git_ref}:{prefix}SKILL.md"])
-    except SkillGitError as exc:
-        raise SkillGitError(
-            f"Could not read SKILL.md at ref {git_ref!r} in {root} "
-            f"(path {prefix}SKILL.md within the repo): {exc}"
-        ) from exc
-    skill_md = _strip_frontmatter(raw_skill_md).strip()
-
+    skill_bodies: list[str] = []
     reference_texts: dict[str, str] = {}
-    if include_references:
-        listing = _run_git(
-            ["git", "-C", str(root), "ls-tree", "--name-only", git_ref, "--", f"{prefix}references/"]
-        )
-        for line in listing.splitlines():
-            line = line.strip()
-            if not line or not line.endswith(".md"):
-                continue
-            content = _run_git(["git", "-C", str(root), "show", f"{git_ref}:{line}"]).strip()
-            reference_texts[Path(line).name] = content
+    # Only namespace reference filenames by their source skill directory when
+    # loading more than one skill — a single skill_path (the common case,
+    # and what the pre-split test suite exercises) keeps bare filenames.
+    prefix_keys = len(skill_paths) > 1
 
-    return SkillContent(skill_md=skill_md, reference_texts=reference_texts)
+    for skill_path in skill_paths:
+        root, prefix = _git_root_and_prefix(skill_path)
+
+        try:
+            raw_skill_md = _run_git(["git", "-C", str(root), "show", f"{git_ref}:{prefix}SKILL.md"])
+        except SkillGitError as exc:
+            raise SkillGitError(
+                f"Could not read SKILL.md at ref {git_ref!r} in {root} "
+                f"(path {prefix}SKILL.md within the repo): {exc}"
+            ) from exc
+        skill_bodies.append(_strip_frontmatter(raw_skill_md).strip())
+
+        if include_references:
+            listing = _run_git(
+                ["git", "-C", str(root), "ls-tree", "--name-only", git_ref, "--", f"{prefix}references/"]
+            )
+            for line in listing.splitlines():
+                line = line.strip()
+                if not line or not line.endswith(".md"):
+                    continue
+                content = _run_git(["git", "-C", str(root), "show", f"{git_ref}:{line}"]).strip()
+                name = Path(line).name
+                # Prefixed with the source skill's directory name so that,
+                # e.g., wikiterms/sqwiki-verified.md and a same-named file
+                # from another skill directory can't collide.
+                reference_texts[f"{skill_path.name}/{name}" if prefix_keys else name] = content
+
+    return SkillContent(
+        skill_md="\n\n---\n\n".join(skill_bodies), reference_texts=reference_texts
+    )
 
 
 def load_skill(
-    skill_path: Path, include_references: bool = False, git_ref: str | None = None
+    skill_path: Path | str | Sequence[Path | str],
+    include_references: bool = False,
+    git_ref: str | None = None,
 ) -> SkillContent:
-    """Loads the skill from disk. If git_ref is set (e.g. "HEAD"), reads the
-    skill from that committed git revision instead of the working tree —
-    so local uncommitted edits in the skill's repo don't silently change
-    translation behavior underneath the harness. skill_path must then be a
-    directory inside a git working copy of the skill's repo."""
+    """Loads the skill(s) from disk. skill_path may be a single directory or
+    a list of directories (each containing its own SKILL.md, and optionally
+    a references/ directory) — in the list case, each is loaded in the
+    given order and concatenated into one SkillContent, since a single-shot
+    call has no way to invoke a companion skill on demand the way an
+    interactive agent would. If git_ref is set (e.g. "HEAD"), reads the
+    skill(s) from that committed git revision instead of the working tree —
+    so local uncommitted edits in the skill's own repo don't silently change
+    translation behavior underneath the harness. Each directory must then
+    sit inside a git working copy of its repo."""
+    skill_paths = _normalize_skill_paths(skill_path)
+
     if git_ref is not None:
-        return _load_skill_from_git(skill_path, git_ref, include_references)
+        return _load_skill_from_git(skill_paths, git_ref, include_references)
 
-    skill_md_path = skill_path / "SKILL.md"
-    if not skill_md_path.exists():
-        raise FileNotFoundError(
-            f"Pi skill not found at {skill_md_path}. Set 'skill_path' in config.yaml "
-            "to the directory containing SKILL.md."
-        )
-    skill_md = _strip_frontmatter(skill_md_path.read_text(encoding="utf-8")).strip()
-
+    skill_bodies: list[str] = []
     reference_texts: dict[str, str] = {}
-    if include_references:
-        ref_dir = skill_path / "references"
-        if ref_dir.is_dir():
-            for ref_file in sorted(ref_dir.glob("*.md")):
-                reference_texts[ref_file.name] = ref_file.read_text(encoding="utf-8").strip()
+    # Only namespace reference filenames by their source skill directory when
+    # loading more than one skill — a single skill_path (the common case,
+    # and what the pre-split test suite exercises) keeps bare filenames.
+    prefix_keys = len(skill_paths) > 1
 
-    return SkillContent(skill_md=skill_md, reference_texts=reference_texts)
+    for path in skill_paths:
+        skill_md_path = path / "SKILL.md"
+        if not skill_md_path.exists():
+            raise FileNotFoundError(
+                f"Pi skill not found at {skill_md_path}. Set 'skill_path' in config.yaml "
+                "to the directory (or list of directories) containing SKILL.md."
+            )
+        skill_bodies.append(_strip_frontmatter(skill_md_path.read_text(encoding="utf-8")).strip())
+
+        if include_references:
+            ref_dir = path / "references"
+            if ref_dir.is_dir():
+                for ref_file in sorted(ref_dir.glob("*.md")):
+                    key = f"{path.name}/{ref_file.name}" if prefix_keys else ref_file.name
+                    reference_texts[key] = ref_file.read_text(encoding="utf-8").strip()
+
+    return SkillContent(
+        skill_md="\n\n---\n\n".join(skill_bodies), reference_texts=reference_texts
+    )
 
 
 @lru_cache(maxsize=8)
 def load_skill_cached(
-    skill_path: str, include_references: bool, git_ref: str | None = None
+    skill_path: str | tuple[str, ...], include_references: bool, git_ref: str | None = None
 ) -> SkillContent:
-    return load_skill(Path(skill_path), include_references, git_ref)
+    paths: list[str] = [skill_path] if isinstance(skill_path, str) else list(skill_path)
+    return load_skill(paths, include_references, git_ref)
 
 
 def build_translation_messages(

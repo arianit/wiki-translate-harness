@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- `skill_path` now accepts a single directory or a list of directories, to match the upstream skill being split into `enwiki-sqwiki-translation` (translate), `wikiterms`, and `wikiqa`. `skill_loader.load_skill`/`load_skill_cached` concatenate each directory's `SKILL.md` (and, if `include_skill_references` is set, its `references/*.md`) in the given order; reference filenames are namespaced by source skill directory only when more than one path is loaded, so existing single-path configs are unaffected. `config.example.yaml`'s default now lists all three directories.
+
 ## [0.2.0] - 2026-08-06
 
 ### Added

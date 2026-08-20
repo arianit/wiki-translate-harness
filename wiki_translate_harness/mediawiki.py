@@ -1,4 +1,10 @@
-"""MediaWiki Action API client: raw wikitext fetch only, never rendered HTML."""
+"""MediaWiki Action API client.
+
+Source-fetching (fetch_article, fetch_category_members) is raw wikitext
+only, never rendered HTML. parse_wikitext is the one exception — it exists
+solely so live_validator.py can inspect a live render for defects (Lua/cite
+errors, missing templates) that don't show up in raw wikitext at all.
+"""
 
 from __future__ import annotations
 
@@ -122,6 +128,38 @@ class MediaWikiClient:
             cmcontinue = cont
 
         return titles
+
+    async def parse_wikitext(self, text: str, title: str = "API") -> dict:
+        """Live-render wikitext via action=parse, for post-translation
+        validation only (Lua/cite errors, missing templates, redlinks) —
+        never for fetching source content. POST, not GET: translated
+        articles can exceed URL length limits. `title` only affects
+        namespace-relative link resolution in the render; it does not need
+        to be a real page. formatversion=2 is required for `templates[].exists`
+        to be a real boolean (formatversion=1 encodes it as a
+        present-but-empty-string key, which is easy to misread as falsy)."""
+        params = {
+            "action": "parse",
+            "contentmodel": "wikitext",
+            "text": text,
+            "title": title,
+            "prop": "text|templates",
+            "disablelimitreport": "1",
+            "formatversion": "2",
+            "format": "json",
+        }
+        resp = await asyncio.wait_for(
+            self._client.post(self.api_url, data=params), timeout=self._hard_timeout
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        if "error" in data:
+            raise MediaWikiError(f"action=parse failed for title {title!r}: {data['error']}")
+        parse = data.get("parse")
+        if parse is None:
+            raise MediaWikiError(f"action=parse returned no 'parse' result for title {title!r}")
+        return parse
 
 
 class MediaWikiClientPool:

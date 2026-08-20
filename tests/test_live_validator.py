@@ -1,0 +1,196 @@
+"""find_live_issues is tested directly against canned action=parse response
+dicts — no network. The HTML fragments below are real responses captured
+from a live sq.wikipedia.org action=parse call during development (see
+live_validator.py's module docstring), not hand-guessed, so the regexes are
+tested against MediaWiki's actual output shape, including the
+reference-text-wraps-the-error-span nesting that a naive first version of
+the matcher missed.
+
+A couple of respx-mocked tests at the bottom cover MediaWikiClient.parse_wikitext
+and validate_wikitext_live end-to-end, matching test_mediawiki.py's convention.
+"""
+
+import httpx
+import pytest
+import respx
+
+from wiki_translate_harness.live_validator import find_live_issues, validate_wikitext_live
+from wiki_translate_harness.mediawiki import MediaWikiClient
+
+API_URL = "https://sq.wikipedia.org/w/api.php"
+
+
+def test_lua_script_error_detected():
+    parse_result = {
+        "text": (
+            '<div class="mw-content-ltr mw-parser-output" lang="sq" dir="ltr"><p>'
+            '<strong class="error"><span class="scribunto-error mw-scribunto-error-0ffbb6ca">'
+            'Script error: No such module &quot;NonExistentModuleXYZ&quot;.</span></strong>'
+            "</p></div>"
+        ),
+        "templates": [],
+    }
+    issues = find_live_issues(parse_result)
+    assert len(issues) == 1
+    assert issues[0].kind == "lua_script_error"
+    assert issues[0].severity == "error"
+    assert "NonExistentModuleXYZ" in issues[0].message
+
+
+def test_orphaned_named_ref_detected_despite_wrapping_span():
+    # Regression: the real Cite output wraps the error span in an outer
+    # <span class="reference-text">...</span> with no error class of its
+    # own and the SAME tag name — a naive non-greedy match pairs the
+    # wrapper's open tag with the error span's own close tag and silently
+    # swallows it as unrecognized content. This is the exact shape that bit
+    # the first version of _ERROR_SPAN_RE.
+    parse_result = {
+        "text": (
+            '<ol class="references">'
+            '<li id="cite_note-x-1"><span class="mw-cite-backlink">^</span> '
+            '<span class="reference-text"> <span class="error mw-ext-cite-error" lang="sq" dir="ltr">'
+            "Gabim citimi: Etiketë <code>&lt;ref&gt;</code> e pavlefshme;\n"
+            'asnjë tekst nuk u dha për refs e quajtura "x"</span></span>'
+            "</li></ol>"
+        ),
+        "templates": [],
+    }
+    issues = find_live_issues(parse_result)
+    assert len(issues) == 1
+    assert issues[0].kind == "orphaned_named_ref"
+    assert "Gabim citimi" in issues[0].message
+
+
+def test_generic_cite_error_without_ref_keyword_classified_separately():
+    parse_result = {
+        "text": '<span class="error mw-ext-cite-error">Some other citation problem</span>',
+        "templates": [],
+    }
+    issues = find_live_issues(parse_result)
+    assert len(issues) == 1
+    assert issues[0].kind == "cite_error"
+
+
+def test_unexpanded_template_detected_from_templates_list():
+    # formatversion=2 gives a real JSON boolean for `exists` — confirmed
+    # live; formatversion=1 instead uses a present-but-empty-string key,
+    # which parse_wikitext deliberately avoids requesting.
+    parse_result = {
+        "text": "<p>irrelevant</p>",
+        "templates": [
+            {"ns": 10, "title": "Stampa:NonExistentTemplateXYZ", "exists": False},
+            {"ns": 10, "title": "Stampa:Sfn", "exists": True},
+        ],
+    }
+    issues = find_live_issues(parse_result)
+    assert len(issues) == 1
+    assert issues[0].kind == "unexpanded_template"
+    assert issues[0].severity == "warning"
+    assert "NonExistentTemplateXYZ" in issues[0].message
+
+
+def test_existing_templates_not_flagged():
+    parse_result = {
+        "text": "<p>irrelevant</p>",
+        "templates": [{"ns": 10, "title": "Stampa:Sfn", "exists": True}],
+    }
+    assert find_live_issues(parse_result) == []
+
+
+def test_country_data_leak_detected_once_not_per_html_occurrence():
+    # Regression: MediaWiki's redlink markup repeats the same leaked title
+    # in the href query string, the title="" attribute, and the anchor's
+    # visible text — matching raw HTML (rather than stripped visible text)
+    # flagged this three times for one real leak, and the href's
+    # underscore-for-space encoding let \S+ run on into the query string.
+    parse_result = {
+        "text": (
+            '<p><a href="/w/index.php?title=Stampa:Country_data_NonExistentCountryXYZ'
+            '&amp;action=edit&amp;redlink=1" class="new" '
+            'title="Stampa:Country data NonExistentCountryXYZ (nuk është shkruar akoma)">'
+            "Stampa:Country data NonExistentCountryXYZ</a>\n</p>"
+        ),
+        "templates": [{"ns": 10, "title": "Stampa:Country data NonExistentCountryXYZ", "exists": False}],
+    }
+    issues = find_live_issues(parse_result)
+    leak_issues = [i for i in issues if i.kind == "country_data_leak"]
+    assert len(leak_issues) == 1
+    assert "NonExistentCountryXYZ" in leak_issues[0].message
+
+
+def test_clean_render_has_no_issues():
+    parse_result = {
+        "text": '<div class="mw-parser-output"><p>Kjo është prozë krejt normale shqipe.</p></div>',
+        "templates": [{"ns": 10, "title": "Stampa:Sfn", "exists": True}],
+    }
+    assert find_live_issues(parse_result) == []
+
+
+def test_locate_resolves_line_number_and_snippet_when_needle_is_in_source():
+    parse_result = {
+        "text": "<p>irrelevant</p>",
+        "templates": [{"ns": 10, "title": "Stampa:NonExistentTemplateXYZ", "exists": False}],
+    }
+    source = "Lead.\n\n{{NonExistentTemplateXYZ}} more text.\n"
+    issues = find_live_issues(parse_result, source_text=source)
+    assert issues[0].line_number == 3
+    assert "NonExistentTemplateXYZ" in issues[0].snippet
+
+
+def test_locate_returns_none_when_needle_not_found_in_source():
+    # Honest best-effort: an error message synthesized by the Cite
+    # extension doesn't literally appear in the source wikitext, so
+    # line_number/snippet stay None rather than pointing somewhere wrong.
+    parse_result = {
+        "text": '<span class="error mw-ext-cite-error">Gabim citimi: ...</span>',
+        "templates": [],
+    }
+    issues = find_live_issues(parse_result, source_text="Some unrelated wikitext.")
+    assert issues[0].line_number is None
+    assert issues[0].snippet is None
+
+
+@pytest.mark.asyncio
+async def test_parse_wikitext_and_validate_wikitext_live_end_to_end():
+    client = MediaWikiClient(API_URL, "test-agent/1.0")
+    try:
+        with respx.mock(base_url=API_URL) as mock:
+            mock.post(data__contains={"action": "parse"}).mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "parse": {
+                            "title": "API",
+                            "text": (
+                                '<strong class="error"><span class="scribunto-error">'
+                                "Script error: No such module &quot;X&quot;.</span></strong>"
+                            ),
+                            "templates": [{"ns": 828, "title": "Moduli:X", "exists": False}],
+                        }
+                    },
+                )
+            )
+            result = await validate_wikitext_live(client, "{{#invoke:X|foo}}")
+    finally:
+        await client.aclose()
+
+    assert not result.valid
+    kinds = {i.kind for i in result.issues}
+    assert "lua_script_error" in kinds
+    assert "unexpanded_template" in kinds
+
+
+@pytest.mark.asyncio
+async def test_parse_wikitext_raises_on_api_error():
+    from wiki_translate_harness.mediawiki import MediaWikiError
+
+    client = MediaWikiClient(API_URL, "test-agent/1.0")
+    try:
+        with respx.mock(base_url=API_URL) as mock:
+            mock.post(data__contains={"action": "parse"}).mock(
+                return_value=httpx.Response(200, json={"error": {"code": "invalidtitle"}})
+            )
+            with pytest.raises(MediaWikiError):
+                await client.parse_wikitext("text")
+    finally:
+        await client.aclose()

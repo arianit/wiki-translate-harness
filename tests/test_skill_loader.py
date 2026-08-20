@@ -23,6 +23,20 @@ def _make_skill_dir(tmp_path: Path) -> Path:
     return skill_dir
 
 
+def _make_second_skill_dir(tmp_path: Path) -> Path:
+    """A second, independent skill directory — mimics wikiterms sitting
+    alongside enwiki-sqwiki-translation as a sibling to be concatenated."""
+    skill_dir = tmp_path / "wikiterms"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: wikiterms\ndescription: test\n---\n\n# Terms\n\nVerify link targets first.\n"
+    )
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "notes.md").write_text("Verified sqwiki template cache.")
+    return skill_dir
+
+
 def test_frontmatter_stripped(tmp_path: Path):
     skill_dir = _make_skill_dir(tmp_path)
     skill = load_skill(skill_dir, include_references=False)
@@ -110,6 +124,43 @@ def test_repair_messages_include_errors(tmp_path: Path):
     assert "[[broken" in messages[1]["content"]
 
 
+def test_multi_path_concatenates_bodies_in_order(tmp_path: Path):
+    first = _make_skill_dir(tmp_path)
+    second = _make_second_skill_dir(tmp_path)
+    skill = load_skill([first, second], include_references=False)
+    assert "Translation rules here." in skill.skill_md
+    assert "Verify link targets first." in skill.skill_md
+    assert skill.skill_md.index("Translation rules here.") < skill.skill_md.index(
+        "Verify link targets first."
+    )
+
+
+def test_multi_path_prefixes_reference_keys_to_avoid_collision(tmp_path: Path):
+    first = _make_skill_dir(tmp_path)
+    second = _make_second_skill_dir(tmp_path)
+    skill = load_skill([first, second], include_references=True)
+    assert "enwiki-sqwiki-translation/notes.md" in skill.reference_texts
+    assert "wikiterms/notes.md" in skill.reference_texts
+    assert "Some verified reference notes." in skill.reference_texts["enwiki-sqwiki-translation/notes.md"]
+    assert "Verified sqwiki template cache." in skill.reference_texts["wikiterms/notes.md"]
+
+
+def test_single_element_list_keeps_bare_reference_keys(tmp_path: Path):
+    """A list containing exactly one skill directory should behave exactly
+    like passing that directory directly — no unnecessary prefixing."""
+    skill_dir = _make_skill_dir(tmp_path)
+    skill = load_skill([skill_dir], include_references=True)
+    assert "notes.md" in skill.reference_texts
+    assert "enwiki-sqwiki-translation/notes.md" not in skill.reference_texts
+
+
+def test_multi_path_missing_skill_reports_offending_directory(tmp_path: Path):
+    first = _make_skill_dir(tmp_path)
+    missing = tmp_path / "wikiqa"
+    with pytest.raises(FileNotFoundError, match="wikiqa"):
+        load_skill([first, missing], include_references=False)
+
+
 def _git(args: list[str], cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
@@ -178,3 +229,42 @@ def test_git_ref_content_hash_differs_from_working_copy(tmp_path: Path):
     committed = load_skill(skill_dir, include_references=False, git_ref="HEAD")
     working = load_skill(skill_dir, include_references=False, git_ref=None)
     assert committed.content_hash != working.content_hash
+
+
+def _make_second_git_skill_repo(tmp_path: Path) -> Path:
+    """A second, independent skill git repo — mimics wikiterms living in its
+    own repo (or its own subdirectory of a shared repo) alongside the main
+    skill's repo."""
+    repo_root = tmp_path / "skill-repo-2"
+    repo_root.mkdir()
+    _git(["init", "-q"], cwd=repo_root)
+    _git(["config", "user.email", "test@example.com"], cwd=repo_root)
+    _git(["config", "user.name", "Test"], cwd=repo_root)
+
+    skill_dir = repo_root / "wikiterms"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: wikiterms\ndescription: test\n---\n\n# Terms\n\nCommitted terms rules.\n"
+    )
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "notes.md").write_text("Committed terms reference notes.")
+
+    _git(["add", "-A"], cwd=repo_root)
+    _git(["commit", "-q", "-m", "initial"], cwd=repo_root)
+
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: wikiterms\ndescription: test\n---\n\n# Terms\n\nUNCOMMITTED terms edit.\n"
+    )
+    return skill_dir
+
+
+def test_git_ref_multi_path_concatenates_committed_content(tmp_path: Path):
+    first = _make_git_skill_repo(tmp_path)
+    second = _make_second_git_skill_repo(tmp_path)
+    skill = load_skill([first, second], include_references=True, git_ref="HEAD")
+    assert "Committed rules." in skill.skill_md
+    assert "Committed terms rules." in skill.skill_md
+    assert "UNCOMMITTED" not in skill.skill_md
+    assert "enwiki-sqwiki-translation/notes.md" in skill.reference_texts
+    assert "wikiterms/notes.md" in skill.reference_texts

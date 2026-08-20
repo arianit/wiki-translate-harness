@@ -1,0 +1,10 @@
+{| class="wikitable"
+|-
+! Grupi !! Emri !! Shënime
+|-
+| rowspan="2" | A || Alfa || shënim 1
+|-
+| Beta
+|-
+| B || Gama || shënim 3
+|}
