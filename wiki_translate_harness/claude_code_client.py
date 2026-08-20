@@ -160,9 +160,23 @@ def run_claude_cli(
     cost = data.get("total_cost_usd") or 0.0
     duration_ms = data.get("duration_ms", 0)
 
+    # Extended-thinking tokens (usage.output_tokens_details.thinking_tokens)
+    # count toward output_tokens but produce zero characters in the text
+    # stream -- confirmed live: a genuinely complete, well-formed 9515
+    # output-token response (is_error: false, stop_reason: end_turn) was
+    # 7765 of those tokens thinking, leaving ~1750 tokens' worth of real
+    # text -- comparing chars-recovered against the full output_tokens
+    # figure (mmtp's original heuristic, ported from a pipeline that
+    # apparently doesn't see this much extended thinking) flagged it as
+    # truncated even though nothing was lost. Only the non-thinking tokens
+    # could ever have produced visible text, so only those belong in the
+    # ratio check.
+    thinking_tokens = (usage.get("output_tokens_details") or {}).get("thinking_tokens", 0)
+    visible_output_tokens = max(output_tokens - thinking_tokens, 0)
+
     if (
-        output_tokens >= _TRUNCATION_CHECK_MIN_OUTPUT_TOKENS
-        and len(result_text) < output_tokens * _MIN_CHARS_PER_OUTPUT_TOKEN
+        visible_output_tokens >= _TRUNCATION_CHECK_MIN_OUTPUT_TOKENS
+        and len(result_text) < visible_output_tokens * _MIN_CHARS_PER_OUTPUT_TOKEN
     ):
         return ClaudeCLIResult(
             is_error=True,
@@ -173,9 +187,10 @@ def run_claude_cli(
             model_used=model,
             raw=data,
             stderr=(
-                f"Suspected truncated output: {output_tokens} output tokens were "
-                f"generated but only {len(result_text)} chars of text were "
-                "recovered from the stream — some content was likely lost."
+                f"Suspected truncated output: {visible_output_tokens} non-thinking output "
+                f"tokens ({output_tokens} total, {thinking_tokens} thinking) but only "
+                f"{len(result_text)} chars of text were recovered from the stream — "
+                "some content was likely lost."
             ),
         )
 

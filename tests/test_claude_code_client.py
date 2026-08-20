@@ -125,6 +125,45 @@ def test_truncation_heuristic_flags_short_result_as_error():
     assert "truncated" in result.stderr.lower()
 
 
+def test_thinking_tokens_excluded_from_truncation_check():
+    """Regression test for a real false positive: a genuinely complete
+    response (is_error: false, stop_reason: end_turn) with heavy extended
+    thinking got flagged as truncated because thinking tokens count toward
+    output_tokens but produce zero characters in the text stream. Modeled
+    on a real reproduction: 9515 total output tokens, 7765 of them
+    thinking, ~3500 chars of real text -- must NOT be flagged."""
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from wiki_translate_harness.claude_code_client import run_claude_cli
+
+    real_text = "x" * 3500  # ~3500 chars of "real" translated text
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": real_text}]}},
+        {
+            "type": "result",
+            "is_error": False,
+            "usage": {
+                "input_tokens": 2,
+                "output_tokens": 9515,
+                "output_tokens_details": {"thinking_tokens": 7765},
+            },
+            "total_cost_usd": 0.33,
+        },
+    ]
+    stdout = "\n".join(json.dumps(e) for e in events)
+
+    with patch(
+        "wiki_translate_harness.claude_code_client.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    ):
+        result = run_claude_cli("system", "user", model="claude-sonnet-5")
+
+    assert not result.is_error
+    assert result.result_text == real_text
+
+
 def test_missing_cli_binary_reported_as_error():
     from unittest.mock import patch
 
