@@ -1,10 +1,15 @@
 # wiki-translate-harness
 
 Batch harness that translates Wikipedia articles into a target-language wiki
-source (built and tested for English → Albanian sq.wikipedia), via
-OpenRouter. All translation judgment is delegated to the
+source (built and tested for English → Albanian sq.wikipedia), via the
+Claude Code CLI by default, OpenRouter, or a local OpenAI-compatible server
+— see **Choosing an engine** below. All translation judgment is delegated
+to the
 [enwiki-sqwiki-translation](https://github.com/arianit/enwiki-sqwiki-translation)
-Pi skill — this harness only fetches, splits, invokes, validates, retries,
+Pi skill — split across three directories in that repo (translate, `wikiterms`,
+`wikiqa`) which this harness loads and concatenates, since it has no
+Skill-tool equivalent to invoke them on demand the way an interactive agent
+would. This harness only fetches, splits, invokes, validates, retries,
 caches, verifies facts, estimates cost, and saves. It contains no
 translation prompts.
 
@@ -54,8 +59,10 @@ workable in practice.
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 cp config.example.yaml config.yaml   # edit model/workers/skill_path as needed
-export OPENROUTER_API_KEY=sk-or-...
 export WIKIMEDIA_CONTACT=you@example.com   # or set wikimedia_contact in config.yaml
+# Only needed for --provider openrouter (the default, claude_code, uses
+# your existing Claude Code CLI login instead — see "Choosing an engine"):
+# export OPENROUTER_API_KEY=sk-or-...
 ```
 
 `wikimedia_contact` is required — Wikimedia's
@@ -67,9 +74,9 @@ explicit `user_agent` override).
 ## Usage
 
 ```bash
-wiki-translate-harness --title "Paris" --model deepseek/deepseek-chat-v3-0324 --workers 4
-wiki-translate-harness --titles articles.txt --model qwen/qwen3-235b-a22b
-wiki-translate-harness --category "Physics" --model mistralai/mistral-large
+wiki-translate-harness --title "Paris"   # provider: claude_code, model: claude-sonnet-5 by default
+wiki-translate-harness --titles articles.txt --provider openrouter --model qwen/qwen3-235b-a22b
+wiki-translate-harness --category "Physics" --provider openrouter --model mistralai/mistral-large
 wiki-translate-harness --file article.wiki
 wiki-translate-harness --directory raw_articles/
 ```
@@ -98,14 +105,43 @@ being re-sent to the model. Pass `--force` to re-translate regardless.
 Logs: `logs/run.log` (all activity), `logs/errors.log` (errors only).
 Live counters: `stats.json`, updated after every section.
 
+## Choosing an engine
+
+Three `--provider` values, selectable per run with no code change:
+
+- **`claude_code`** (default) — runs `claude -p` under your existing Claude
+  Code CLI login/subscription. No API key needed. Cost currently always
+  reports as `$0.00` (the CLI's own JSON output does carry a real
+  `total_cost_usd` per call, but that isn't wired into the harness's
+  external per-token pricing-table cost model yet — see
+  `wiki_translate_harness/claude_code_client.py`).
+- **`openrouter`** — the original engine, unchanged. Requires
+  `openrouter_api_key` (or the `OPENROUTER_API_KEY` env var).
+- **`local`** — any local OpenAI-compatible server (llama.cpp server,
+  Ollama, LM Studio, vLLM, ...). See below.
+
+Switch with `--provider openrouter` / `--provider local`, or set `provider:`
+in `config.yaml`. `--model`/`--workers`/caching/verification/post-processing
+all behave the same regardless of engine. If you switch `--provider` without
+also passing `--model`, `build_config()` picks a provider-appropriate
+default model rather than silently carrying over the other provider's
+model id.
+
+Adding a fourth engine later means adding one branch to
+`wiki_translate_harness/engines.py`'s `build_llm_client()` and a new client
+module implementing `chat_completion()`/`get_pricing_for()`/
+`fetch_pricing()`/`aclose()` (see `engines.LLMEngineClient`) — nothing in
+`translator.py`, `repair.py`, `pipeline.py`, or `benchmark.py` needs to
+change, since they only depend on that duck-typed contract.
+
 ## Local models
 
-By default translation requests go to OpenRouter. Pass `--provider local` to
-route them instead to any local OpenAI-compatible server — llama.cpp
-server, Ollama, LM Studio, vLLM, etc. — selectable per run, no code change
-needed. Everything else (`--model`, `--workers`, caching, verification,
-post-processing) behaves the same either way; local runs just skip the
-OpenRouter API-key check and always report `$0.00` cost.
+Pass `--provider local` to route translation requests to any local
+OpenAI-compatible server — llama.cpp server, Ollama, LM Studio, vLLM, etc.
+— selectable per run, no code change needed. Everything else (`--model`,
+`--workers`, caching, verification, post-processing) behaves the same
+either way; local runs just skip the OpenRouter API-key check and always
+report `$0.00` cost.
 
 For example, this matches a llama.cpp server configured the same way as
 Pi's `~/.pi/agent/models.json`:
@@ -139,8 +175,9 @@ local_base_url: http://127.0.0.1:8080/v1
 local_model: qwen3-8b-q5-k-m
 ```
 
-then just run `wiki-translate-harness --title "Paris"` — switch back with
-`--provider openrouter` whenever you want. `local_api_key` can be left unset
+then just run `wiki-translate-harness --title "Paris"` — switch to another
+engine with `--provider claude_code` or `--provider openrouter` whenever you
+want. `local_api_key` can be left unset
 (most local servers, including llama.cpp server, ignore it).
 
 ## Fact verification
@@ -273,7 +310,10 @@ is wrapped in a hard `asyncio.wait_for` deadline independent of the
 underlying HTTP client's own timeout — confirmed necessary in practice, as
 httpx's `timeout=` alone did not reliably fire under real network
 conditions and could otherwise hang an entire batch run indefinitely on a
-single stuck socket.
+single stuck socket. The Claude Code CLI engine (`--provider claude_code`)
+isn't HTTP-based — its equivalent deadline is `subprocess.run`'s own
+`timeout=` (`request_timeout_s` in config.yaml), which reliably kills the
+subprocess on expiry.
 
 ## Tests
 

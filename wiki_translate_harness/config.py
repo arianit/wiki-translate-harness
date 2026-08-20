@@ -51,6 +51,24 @@ def build_config(
             if value is not None:
                 data[key] = value
 
+    # If the CLI explicitly switched --provider without also passing
+    # --model, a model id left over in config.yaml for the *previous*
+    # provider must not silently survive the switch. Confirmed necessary in
+    # practice: `--provider claude_code` alone, against a config.yaml with
+    # `provider: openrouter` and an OpenRouter model id, sent that model id
+    # straight to the Claude Code CLI, which rejected it as
+    # claude-code:unrecognized_model.
+    overrides = overrides or {}
+    if overrides.get("provider") is not None and overrides.get("model") is None:
+        data.pop("model", None)
+
+    # Pick a provider-appropriate default model when nothing set one (in
+    # config.yaml, or via --model, or above) -- same reasoning as above,
+    # just covering the case where config.yaml never had a model at all.
+    if "model" not in data:
+        provider = data.get("provider", "claude_code")
+        data["model"] = "claude-sonnet-5" if provider == "claude_code" else "deepseek/deepseek-v3"
+
     config = Config.model_validate(data)
 
     if config.provider == "openrouter" and not config.openrouter_api_key:

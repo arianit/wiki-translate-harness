@@ -1,0 +1,140 @@
+import pytest
+
+from wiki_translate_harness.claude_code_client import (
+    ClaudeCLIResult,
+    ClaudeCodeClient,
+    ClaudeCodeError,
+)
+
+_MESSAGES = [
+    {"role": "system", "content": "You are a translator."},
+    {"role": "user", "content": "Translate: hello"},
+]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_sleep(monkeypatch):
+    async def fast_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr("wiki_translate_harness.claude_code_client.asyncio.sleep", fast_sleep)
+
+
+def _ok(text="përshëndetje", input_tokens=10, output_tokens=5) -> ClaudeCLIResult:
+    return ClaudeCLIResult(
+        is_error=False,
+        result_text=text,
+        total_cost_usd=0.001,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        duration_ms=500,
+        model_used="claude-sonnet-5",
+    )
+
+
+def _err(stderr="boom") -> ClaudeCLIResult:
+    return ClaudeCLIResult(is_error=True, model_used="claude-sonnet-5", stderr=stderr)
+
+
+@pytest.mark.asyncio
+async def test_successful_call_returns_usage(monkeypatch):
+    monkeypatch.setattr(
+        "wiki_translate_harness.claude_code_client.run_claude_cli",
+        lambda *a, **kw: _ok(),
+    )
+    client = ClaudeCodeClient(model="claude-sonnet-5")
+    text, pt, ct = await client.chat_completion("claude-sonnet-5", _MESSAGES)
+    assert text == "përshëndetje"
+    assert pt == 10
+    assert ct == 5
+
+
+@pytest.mark.asyncio
+async def test_no_user_message_raises():
+    client = ClaudeCodeClient(model="claude-sonnet-5")
+    with pytest.raises(ClaudeCodeError):
+        await client.chat_completion("claude-sonnet-5", [{"role": "system", "content": "x"}])
+
+
+@pytest.mark.asyncio
+async def test_missing_binary_fails_fast_without_retrying(monkeypatch):
+    calls = []
+
+    def fake(*a, **kw):
+        calls.append(1)
+        return _err(stderr="claude CLI not found ('claude'): [Errno 2] No such file or directory")
+
+    monkeypatch.setattr("wiki_translate_harness.claude_code_client.run_claude_cli", fake)
+    client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
+    with pytest.raises(ClaudeCodeError):
+        await client.chat_completion("claude-sonnet-5", _MESSAGES)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retries_then_succeeds(monkeypatch):
+    results = [_err(), _err(), _ok()]
+
+    def fake(*a, **kw):
+        return results.pop(0)
+
+    monkeypatch.setattr("wiki_translate_harness.claude_code_client.run_claude_cli", fake)
+    retries_seen = []
+    client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
+    text, pt, ct = await client.chat_completion(
+        "claude-sonnet-5", _MESSAGES, on_retry=lambda attempt, reason, delay: retries_seen.append(attempt)
+    )
+    assert text == "përshëndetje"
+    assert retries_seen == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_gives_up_after_max_retries(monkeypatch):
+    monkeypatch.setattr(
+        "wiki_translate_harness.claude_code_client.run_claude_cli",
+        lambda *a, **kw: _err(stderr="persistent failure"),
+    )
+    client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=2)
+    with pytest.raises(ClaudeCodeError, match="persistent failure"):
+        await client.chat_completion("claude-sonnet-5", _MESSAGES)
+
+
+def test_truncation_heuristic_flags_short_result_as_error():
+    """Ported truncation heuristic, exercised directly against
+    run_claude_cli's parsing logic via a hand-built stream-json payload,
+    since it's internal to that function rather than ClaudeCodeClient."""
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from wiki_translate_harness.claude_code_client import run_claude_cli
+
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "short"}]}},
+        {"type": "result", "usage": {"input_tokens": 100, "output_tokens": 3000}, "total_cost_usd": 0.05},
+    ]
+    stdout = "\n".join(json.dumps(e) for e in events)
+
+    with patch(
+        "wiki_translate_harness.claude_code_client.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    ):
+        result = run_claude_cli("system", "user", model="claude-sonnet-5")
+
+    assert result.is_error
+    assert "truncated" in result.stderr.lower()
+
+
+def test_missing_cli_binary_reported_as_error():
+    from unittest.mock import patch
+
+    from wiki_translate_harness.claude_code_client import run_claude_cli
+
+    with patch(
+        "wiki_translate_harness.claude_code_client.subprocess.run",
+        side_effect=FileNotFoundError("no such file"),
+    ):
+        result = run_claude_cli("system", "user", model="claude-sonnet-5", cli_path="nonexistent-claude")
+
+    assert result.is_error
+    assert "not found" in result.stderr

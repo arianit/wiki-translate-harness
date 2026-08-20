@@ -2,11 +2,17 @@
 # OPENROUTER_API_KEY env var overrides openrouter_api_key set here.
 # LOCAL_API_KEY env var overrides local_api_key set here.
 
-# provider: openrouter (default, cloud) or local (any OpenAI-compatible
-# server: llama.cpp server, Ollama, LM Studio, vLLM, ...). Override per run
-# with `--provider local`; --model and --workers work the same either way.
-provider: openrouter
-model: deepseek/deepseek-chat-v3-0324
+# provider: claude_code (default — runs `claude -p` under your existing
+# Claude Code CLI login/subscription, no API key needed), openrouter
+# (cloud), or local (any OpenAI-compatible server: llama.cpp server, Ollama,
+# LM Studio, vLLM, ...). Override per run with `--provider openrouter` /
+# `--provider local`; --model and --workers work the same across all three.
+# If you switch provider without also setting model below, config.py picks
+# a provider-appropriate default (claude-sonnet-5 for claude_code,
+# deepseek/deepseek-v3 otherwise) rather than silently reusing whatever
+# model id you had for the other provider.
+provider: claude_code
+model: claude-sonnet-5
 workers: 4
 temperature: 0
 max_retries: 5
@@ -22,19 +28,34 @@ source_wiki_api: https://en.wikipedia.org/w/api.php
 chunk_min_tokens: 1500
 chunk_max_tokens: 2500
 
-# Directory containing SKILL.md for the enwiki-sqwiki-translation Pi skill.
-skill_path: ~/.claude/skills/enwiki-sqwiki-translation
+# Directory (or list of directories) containing SKILL.md for the Pi skill.
+# The skill is split across three directories — enwiki-sqwiki-translation
+# (translate), wikiterms (terminology/link verification), wikiqa (pre-delivery
+# checklist) — that an interactive agent invokes on demand via a Skill tool.
+# This harness has no such mechanism, so it loads all three up front and
+# concatenates them into one system prompt; list translate first, since its
+# content frames the other two. A single path (just translate) also still
+# works, e.g. if you want the harness's own verification.py to fully replace
+# wikiterms's role instead of also sending the model that skill's text.
+skill_path:
+  - ~/.claude/skills/enwiki-sqwiki-translation
+  - ~/.claude/skills/wikiterms
+  - ~/.claude/skills/wikiqa
 # On: sqwiki-verified.md's confirmed template names/params reach the model.
 # Costs more tokens per request; off falls back to guessing on anything not
 # covered by the harness's own live verification (see wiki_translate_harness/verification.py).
 include_skill_references: true
-# Pin the skill to a committed git revision instead of the working tree, so
+# Pin the skill(s) to a committed git revision instead of the working tree, so
 # local uncommitted edits in the skill's own repo don't silently change
-# translation behavior. skill_path must be inside a git working copy of the
-# skill's repo. Set to null (or remove) to read the live working tree instead.
+# translation behavior. Each skill_path directory must be inside a git
+# working copy of its repo. Set to null (or remove) to read the live working
+# tree instead.
 skill_git_ref: HEAD
 
-output_dir: output
+# Defaults into the shared wiki-translate-queue repo's output/ folder, same
+# place wikitranslateautorun/mmtp/wikipedia-articles-translation put theirs.
+# Point at a plain local `output` instead if you don't want that.
+output_dir: ~/code/wiki-translate-queue/output
 cache_db_path: cache/translation_memory.sqlite3
 log_dir: logs
 stats_path: stats.json
@@ -50,6 +71,14 @@ openrouter_base_url: https://openrouter.ai/api/v1
 # local_base_url: http://localhost:8080/v1
 # local_api_key: local
 # local_model: llama-3.1-8b-instruct   # falls back to `model` if unset
+
+# Used only when provider: claude_code. claude_code_cli_path is the `claude`
+# binary to invoke (override if it's not on PATH); claude_code_permission_mode
+# is passed straight to `claude -p --permission-mode` (defense in depth —
+# every call already runs with --tools "" disabling all tool use, so there's
+# nothing for a permission prompt to fire on either way).
+# claude_code_cli_path: claude
+# claude_code_permission_mode: bypassPermissions
 # Sized for the largest oversized-section chunks (never split further, so a
 # protected table/template can push a single chunk to 10k+ input tokens) —
 # confirmed a real 12k-input/7k-output completion can legitimately take
@@ -73,6 +102,25 @@ verification_db_path: cache/verified_facts.sqlite3
 wikidata_timeout_s: 20
 verification_timeout_s: 60
 generate_reports: true
+
+# Whole-article checks on the assembled article: static (validator.py —
+# malformed {{convert}} args, {{harvc}} usage, unsupported Sfn |text=,
+# wikitable rowspan/colspan mismatches, plus the existing structural
+# checks) always run; live_validate additionally renders the article via
+# the target wiki's action=parse API (see live_validator.py) to catch Lua
+# errors, Cite errors (including an orphaned named ref), templates that
+# don't exist, and leaked raw {{flagicon}}/{{flag}} "Country data ..."
+# text — defects that don't show up in raw wikitext at all. On failure,
+# the harness re-prompts the model with only the affected chunk(s) and
+# their specific findings, re-validates, up to max_assembly_repair_rounds
+# — if issues remain after that, the article is written to
+# needs_human_review.json + {title}.review.md in output_dir instead of
+# being saved. Independent of max_repair_attempts, which governs the
+# separate per-chunk structural/degenerate-repetition repair loop that
+# runs before assembly.
+live_validate: true
+live_validate_timeout_s: 30
+max_assembly_repair_rounds: 3
 
 # Fills any citation missing |language= in the final assembled article, and
 # renames citation parameter *names* mistranslated into the target language

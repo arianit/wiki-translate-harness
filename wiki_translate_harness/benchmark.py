@@ -12,10 +12,9 @@ from pathlib import Path
 import orjson
 
 from wiki_translate_harness.cache import TranslationCache
-from wiki_translate_harness.config import resolve_llm_endpoint
+from wiki_translate_harness.engines import build_llm_client
 from wiki_translate_harness.mediawiki import MediaWikiClient, wiki_api_url_for_lang
-from wiki_translate_harness.models import ChunkStatus, Config
-from wiki_translate_harness.openrouter import OpenRouterClient, OpenRouterError
+from wiki_translate_harness.models import ChunkStatus, Config, EngineError
 from wiki_translate_harness.output import assemble_chunks, sanitize_filename, save_article
 from wiki_translate_harness.parser import build_chunks, split_into_sections
 from wiki_translate_harness.skill_loader import load_skill
@@ -64,17 +63,9 @@ async def run_benchmark(
 
     for model in models:
         model_config = base_config.model_copy(update={"model": model})
-        base_url, api_key, _ = resolve_llm_endpoint(model_config)
-        or_client = OpenRouterClient(
-            api_key=api_key,
-            base_url=base_url,
-            user_agent=model_config.user_agent,
-            timeout=model_config.request_timeout_s,
-            max_retries=model_config.max_retries,
-            provider=model_config.provider,
-        )
+        llm_client, _ = build_llm_client(model_config)
         try:
-            pricing = await or_client.get_pricing_for(model)
+            pricing = await llm_client.get_pricing_for(model)
             chunks = build_chunks(
                 source.title,
                 sections,
@@ -89,11 +80,11 @@ async def run_benchmark(
                 async with sem:
                     try:
                         await translate_chunk(
-                            chunk, model_config, or_client, skill, cache, pricing, stats_tracker.stats
+                            chunk, model_config, llm_client, skill, cache, pricing, stats_tracker.stats
                         )
-                    except OpenRouterError as exc:
+                    except EngineError as exc:
                         chunk.status = ChunkStatus.FAILED
-                        logger.error("OpenRouter call failed for model %s: %s", model, exc)
+                        logger.error("Engine call failed for model %s: %s", model, exc)
 
             start = time.monotonic()
             await asyncio.gather(*(worker(c) for c in chunks))
@@ -129,7 +120,7 @@ async def run_benchmark(
             }
             translations[model] = assembled if not failed else None
         finally:
-            await or_client.aclose()
+            await llm_client.aclose()
 
     if cache is not None:
         cache.close()

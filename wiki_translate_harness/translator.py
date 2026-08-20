@@ -10,8 +10,9 @@ import hashlib
 from dataclasses import dataclass
 
 from wiki_translate_harness.cache import TranslationCache, compute_key
+from wiki_translate_harness.engines import LLMEngineClient
 from wiki_translate_harness.models import Chunk, ChunkStatus, Config, ModelPricing, RunStats, TranslationResult, ValidationResult
-from wiki_translate_harness.openrouter import OpenRouterClient, RetryCallback, run_completion
+from wiki_translate_harness.openrouter import RetryCallback, run_completion
 from wiki_translate_harness.repair import repair_chunk
 from wiki_translate_harness.skill_loader import SkillContent, build_translation_messages
 from wiki_translate_harness.validator import format_errors, validate_wikitext
@@ -39,7 +40,7 @@ def _accumulate(stats: RunStats, result: TranslationResult) -> None:
 async def translate_chunk(
     chunk: Chunk,
     config: Config,
-    client: OpenRouterClient,
+    client: LLMEngineClient,
     skill: SkillContent,
     cache: TranslationCache | None,
     pricing: ModelPricing | None,

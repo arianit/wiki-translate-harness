@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +21,7 @@ class ArticleStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    NEEDS_HUMAN_REVIEW = "needs_human_review"
 
 
 class ChunkStatus(str, Enum):
@@ -69,6 +71,26 @@ class Chunk(BaseModel):
 class ValidationIssue(BaseModel):
     kind: str
     message: str
+    # Informational only — does not change ValidationResult.valid gating
+    # (any issue, of any severity, still invalidates). Lets callers surface
+    # a defect's seriousness in reports/state without silently tolerating
+    # anything.
+    severity: Literal["error", "warning"] = "error"
+    # Both approximate/best-effort where set: for live (HTML-derived)
+    # findings there is no wikitext line mapping, so these are located by
+    # searching the source wikitext for the finding's identifying string.
+    line_number: int | None = None
+    snippet: str | None = None
+
+    def as_finding(self) -> dict[str, object]:
+        """The {severity, line_number, snippet, explanation} shape used for
+        repair prompts and the needs_human_review record."""
+        return {
+            "severity": self.severity,
+            "line_number": self.line_number,
+            "snippet": self.snippet,
+            "explanation": self.message,
+        }
 
 
 class ValidationResult(BaseModel):
@@ -77,6 +99,14 @@ class ValidationResult(BaseModel):
 
     def __bool__(self) -> bool:  # pragma: no cover - convenience
         return self.valid
+
+
+class EngineError(Exception):
+    """Base class for a translation-engine call failure, regardless of which
+    engine (OpenRouter, Claude Code CLI, a future one) raised it — the two
+    places that catch this to gracefully fail one chunk/article instead of
+    crashing the whole run (pipeline.py, benchmark.py) shouldn't need a new
+    except clause every time a new engine is added."""
 
 
 class TranslationResult(BaseModel):
@@ -126,6 +156,10 @@ class RunStats(BaseModel):
     articles_completed: int = 0
     articles_failed: int = 0
     articles_skipped: int = 0
+    # Separate from articles_failed: an article whose assembled output still
+    # had unresolved defects after the assembly-level repair loop, rather
+    # than one that crashed/timed out. See review_queue.py.
+    articles_needs_human_review: int = 0
     sections_translated: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
@@ -143,8 +177,10 @@ class RunStats(BaseModel):
 class Config(BaseModel):
     """Full harness configuration: config.yaml merged with CLI overrides."""
 
-    provider: str = "openrouter"
-    model: str = "deepseek/deepseek-v3"
+    # "claude_code" (default, uses the caller's existing Claude Code CLI
+    # login — no API key), "openrouter", or "local". See engines.py.
+    provider: str = "claude_code"
+    model: str = "claude-sonnet-5"
     workers: int = 4
     temperature: float = 0.0
     max_retries: int = 5
@@ -152,6 +188,14 @@ class Config(BaseModel):
     validate_output: bool = Field(default=True, alias="validate")
     repair: bool = True
     max_repair_attempts: int = 2
+
+    # Whole-article checks (live parse-API + the static template/table
+    # checks in validator.py, re-run on the assembled article) that only
+    # make sense once every chunk is in place — independent from the
+    # per-chunk loop above, with its own repair-round budget.
+    live_validate: bool = True
+    live_validate_timeout_s: float = 30.0
+    max_assembly_repair_rounds: int = 3
 
     source_lang: str = "en"
     target_lang: str = "sq"
@@ -166,7 +210,21 @@ class Config(BaseModel):
     chunk_min_tokens: int = 1500
     chunk_max_tokens: int = 2500
 
-    skill_path: Path = Path.home() / ".claude" / "skills" / "enwiki-sqwiki-translation"
+    # A single skill directory, or a list of them. The skill is split across
+    # three directories — enwiki-sqwiki-translation (translate), wikiterms,
+    # wikiqa — that an interactive agent invokes on demand via a Skill tool;
+    # this harness has no such mechanism, so by default it loads all three
+    # up front and concatenates them into one system prompt (see
+    # skill_loader.load_skill). translate is listed first since its content
+    # frames the other two; the other two's order doesn't otherwise matter
+    # for a tool-less call.
+    skill_path: Path | list[Path] = Field(
+        default_factory=lambda: [
+            Path.home() / ".claude" / "skills" / "enwiki-sqwiki-translation",
+            Path.home() / ".claude" / "skills" / "wikiterms",
+            Path.home() / ".claude" / "skills" / "wikiqa",
+        ]
+    )
     include_skill_references: bool = False
     # If set (e.g. "HEAD"), the skill is read from this git revision instead
     # of the working tree, so local uncommitted edits to the skill's repo
@@ -174,7 +232,12 @@ class Config(BaseModel):
     # inside a git working copy of the skill's repo. None reads plain files.
     skill_git_ref: str | None = None
 
-    output_dir: Path = Path("output")
+    # Defaults into the shared wiki-translate-queue repo's output/ folder
+    # (github.com/arianit/wiki-translate-queue) so articles produced by this
+    # harness land in the same place as wikitranslateautorun's/mmtp's/
+    # wikipedia-articles-translation's -- override in config.yaml for a
+    # purely local run.
+    output_dir: Path = Path("~/code/wiki-translate-queue/output")
     cache_db_path: Path = Path("cache") / "translation_memory.sqlite3"
     log_dir: Path = Path("logs")
     stats_path: Path = Path("stats.json")
@@ -238,6 +301,12 @@ class Config(BaseModel):
     local_api_key: str | None = None
     # Falls back to `model` when unset, so --model keeps working for local too.
     local_model: str | None = None
+
+    # Claude Code CLI engine (provider: claude_code, the default) — runs
+    # `claude -p` under the caller's existing Claude Code subscription/login,
+    # no API key needed. See claude_code_client.py.
+    claude_code_cli_path: str = "claude"
+    claude_code_permission_mode: str = "bypassPermissions"
     # Sized for the largest oversized-section chunks (never split further,
     # so a protected table/template can push a single chunk to 10k+ input
     # tokens). Confirmed directly against the raw API (bypassing this
@@ -261,12 +330,11 @@ class Config(BaseModel):
     @field_validator("provider")
     @classmethod
     def _validate_provider(cls, v: str) -> str:
-        if v not in ("openrouter", "local"):
-            raise ValueError(f"provider must be 'openrouter' or 'local', got {v!r}")
+        if v not in ("openrouter", "local", "claude_code"):
+            raise ValueError(f"provider must be 'openrouter', 'local', or 'claude_code', got {v!r}")
         return v
 
     @field_validator(
-        "skill_path",
         "output_dir",
         "cache_db_path",
         "log_dir",
@@ -278,4 +346,13 @@ class Config(BaseModel):
     def _expand_user(cls, v: object) -> object:
         if isinstance(v, (str, Path)):
             return Path(v).expanduser()
+        return v
+
+    @field_validator("skill_path", mode="before")
+    @classmethod
+    def _expand_user_skill_path(cls, v: object) -> object:
+        if isinstance(v, (str, Path)):
+            return Path(v).expanduser()
+        if isinstance(v, (list, tuple)):
+            return [Path(p).expanduser() for p in v]
         return v

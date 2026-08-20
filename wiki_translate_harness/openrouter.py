@@ -14,14 +14,14 @@ from typing import Callable
 
 import httpx
 
-from wiki_translate_harness.models import ModelPricing, TranslationResult
+from wiki_translate_harness.models import EngineError, ModelPricing, TranslationResult
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
 RetryCallback = Callable[[int, str, float], None]
 
 
-class OpenRouterError(Exception):
+class OpenRouterError(EngineError):
     pass
 
 

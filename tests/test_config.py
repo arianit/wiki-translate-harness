@@ -10,13 +10,57 @@ _CONTACT = {"wikimedia_contact": "test@example.com"}
 def test_missing_api_key_raises(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(ValueError, match="No OpenRouter API key"):
-        build_config(None, _CONTACT)
+        build_config(None, {**_CONTACT, "provider": "openrouter"})
 
 
 def test_env_var_supplies_api_key(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    cfg = build_config(None, _CONTACT)
+    cfg = build_config(None, {**_CONTACT, "provider": "openrouter"})
     assert cfg.openrouter_api_key == "sk-test"
+
+
+def test_default_provider_is_claude_code():
+    cfg = build_config(None, _CONTACT)
+    assert cfg.provider == "claude_code"
+    assert cfg.model == "claude-sonnet-5"
+
+
+def test_switching_to_openrouter_without_model_gets_openrouter_default(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
+    cfg = build_config(None, {**_CONTACT, "provider": "openrouter"})
+    assert cfg.model == "deepseek/deepseek-v3"
+
+
+def test_explicit_model_survives_provider_switch(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
+    cfg = build_config(None, {**_CONTACT, "provider": "openrouter", "model": "qwen/qwen3-235b-a22b"})
+    assert cfg.model == "qwen/qwen3-235b-a22b"
+
+
+def test_invalid_provider_rejected():
+    with pytest.raises(ValueError, match="provider must be"):
+        build_config(None, {**_CONTACT, "provider": "bogus"})
+
+
+def test_cli_provider_switch_drops_stale_yaml_model(tmp_path: Path, monkeypatch):
+    """Regression test: --provider claude_code alone, against a config.yaml
+    with provider: openrouter and an OpenRouter model id, must not silently
+    carry that model id over -- confirmed live to get rejected by the
+    Claude Code CLI as an unrecognized model."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("provider: openrouter\nmodel: deepseek/deepseek-chat-v3-0324\n")
+    cfg = build_config(config_file, {**_CONTACT, "provider": "claude_code"})
+    assert cfg.provider == "claude_code"
+    assert cfg.model == "claude-sonnet-5"
+
+
+def test_cli_provider_switch_with_explicit_model_is_respected(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("provider: openrouter\nmodel: deepseek/deepseek-chat-v3-0324\n")
+    cfg = build_config(config_file, {**_CONTACT, "provider": "claude_code", "model": "claude-opus-5"})
+    assert cfg.model == "claude-opus-5"
 
 
 def test_yaml_config_loaded(tmp_path: Path, monkeypatch):

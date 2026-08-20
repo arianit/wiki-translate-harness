@@ -18,6 +18,7 @@ from wiki_translate_harness.progress import ProgressReporter
 from wiki_translate_harness.sources import ArticleInput, parse_source_ref, resolve_static_inputs
 from wiki_translate_harness.statistics import StatsTracker
 from wiki_translate_harness.benchmark import run_benchmark
+from wiki_translate_harness.queue_runner import DEFAULT_QUEUE_REPO_DIR
 
 app = typer.Typer(
     add_completion=False,
@@ -38,6 +39,7 @@ def _build_overrides(
     cache: Optional[bool],
     validate: Optional[bool],
     repair: Optional[bool],
+    live_validate: Optional[bool] = None,
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> dict:
@@ -49,6 +51,7 @@ def _build_overrides(
         "cache": cache,
         "validate": validate,
         "repair": repair,
+        "live_validate": live_validate,
         "provider": provider,
     }
     overrides = {k: v for k, v in overrides.items() if v is not None}
@@ -78,7 +81,9 @@ def main(
         None, "--model", help="Model id, e.g. deepseek/deepseek-v3 (OpenRouter) or a local model name"
     ),
     provider: Optional[str] = typer.Option(
-        None, "--provider", help="'openrouter' (default) or 'local' (any OpenAI-compatible server)"
+        None, "--provider",
+        help="'claude_code' (default, uses your Claude Code CLI login, no API key), "
+        "'openrouter', or 'local' (any OpenAI-compatible server)",
     ),
     base_url: Optional[str] = typer.Option(
         None, "--base-url", help="Override the active provider's base URL (pair with --provider local)"
@@ -89,6 +94,12 @@ def main(
     cache: Optional[bool] = typer.Option(None, "--cache/--no-cache"),
     validate: Optional[bool] = typer.Option(None, "--validate/--no-validate"),
     repair: Optional[bool] = typer.Option(None, "--repair/--no-repair"),
+    live_validate: Optional[bool] = typer.Option(
+        None,
+        "--live-validate/--no-live-validate",
+        help="Render the assembled article via the target wiki's action=parse API to catch "
+        "Lua/Cite errors, missing templates, and leaked flag-template text (see live_validator.py)",
+    ),
     config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Path to config.yaml"),
     force: bool = typer.Option(False, "--force", help="Re-translate even if output .wiki already exists"),
 ) -> None:
@@ -100,7 +111,7 @@ def main(
         raise typer.Exit(code=1)
 
     overrides = _build_overrides(
-        model, workers, temperature, max_retries, cache, validate, repair, provider, base_url
+        model, workers, temperature, max_retries, cache, validate, repair, live_validate, provider, base_url
     )
     cfg = build_config(config_path, overrides)
 
@@ -236,6 +247,49 @@ def benchmark(
     elif do_evaluation:
         console.print("[yellow]Evaluation was requested but failed or not enough successful translations.[/yellow]")
 
+
+@app.command()
+def queue(
+    queue_repo_dir: Path = typer.Option(
+        DEFAULT_QUEUE_REPO_DIR, "--queue-repo-dir",
+        help="Local clone of github.com/arianit/wiki-translate-queue",
+    ),
+    max_articles: int = typer.Option(10, "--max-articles", help="Stop after this many articles this run"),
+    stale_hours: float = typer.Option(
+        3.0, "--stale-hours", help="A CLAIMED line older than this is treated as abandoned and reclaimed"
+    ),
+    model: Optional[str] = typer.Option(None, "--model"),
+    provider: Optional[str] = typer.Option(None, "--provider"),
+    base_url: Optional[str] = typer.Option(None, "--base-url"),
+    workers: Optional[int] = typer.Option(None, "--workers"),
+    temperature: Optional[float] = typer.Option(None, "--temperature"),
+    max_retries: Optional[int] = typer.Option(None, "--max-retries"),
+    cache: Optional[bool] = typer.Option(None, "--cache/--no-cache"),
+    validate: Optional[bool] = typer.Option(None, "--validate/--no-validate"),
+    repair: Optional[bool] = typer.Option(None, "--repair/--no-repair"),
+    live_validate: Optional[bool] = typer.Option(None, "--live-validate/--no-live-validate"),
+    config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Path to config.yaml"),
+) -> None:
+    """Drain articles from the shared queue (github.com/arianit/wiki-translate-queue)
+    instead of a manually-supplied --title/--titles/--category, so this
+    harness can run unattended (e.g. from cron) against the same queue
+    wikitranslateautorun's batch_controller.py uses."""
+    from wiki_translate_harness.queue_runner import run_queue_mode  # local import: mirrors main()
+
+    overrides = _build_overrides(
+        model, workers, temperature, max_retries, cache, validate, repair, live_validate, provider, base_url
+    )
+    cfg = build_config(config_path, overrides)
+    setup_logging(cfg.log_dir)
+
+    stats_tracker = asyncio.run(
+        run_queue_mode(cfg, queue_repo_dir=queue_repo_dir, max_articles=max_articles, stale_hours=stale_hours)
+    )
+    stats = stats_tracker.stats
+    console.print(
+        f"\nQueue run done. Completed: {stats.articles_completed}, failed: {stats.articles_failed}. "
+        f"Estimated cost: ${stats.estimated_cost_usd:.4f}."
+    )
 
 
 if __name__ == "__main__":
