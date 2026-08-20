@@ -164,6 +164,44 @@ def test_thinking_tokens_excluded_from_truncation_check():
     assert result.result_text == real_text
 
 
+def test_cache_tokens_counted_as_input():
+    """Regression test for a real false positive: prompt caching put most
+    of a call's real input in cache_creation_input_tokens rather than
+    input_tokens (confirmed live: input_tokens=2,
+    cache_creation_input_tokens=30278 for the same call), which made
+    translation-harness's output/input ratio safety check see ~4882:1 and
+    reject a normal call as a suspected runaway generation."""
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from wiki_translate_harness.claude_code_client import run_claude_cli
+
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "translated text"}]}},
+        {
+            "type": "result",
+            "is_error": False,
+            "usage": {
+                "input_tokens": 2,
+                "cache_creation_input_tokens": 30278,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 100,
+            },
+            "total_cost_usd": 0.05,
+        },
+    ]
+    stdout = "\n".join(json.dumps(e) for e in events)
+
+    with patch(
+        "wiki_translate_harness.claude_code_client.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    ):
+        result = run_claude_cli("system", "user", model="claude-sonnet-5")
+
+    assert result.input_tokens == 30280
+
+
 def test_missing_cli_binary_reported_as_error():
     from unittest.mock import patch
 

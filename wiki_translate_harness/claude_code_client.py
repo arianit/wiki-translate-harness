@@ -156,7 +156,21 @@ def run_claude_cli(
 
     usage = data.get("usage") or {}
     output_tokens = usage.get("output_tokens", 0)
-    input_tokens = usage.get("input_tokens", 0)
+    # Prompt caching means most of a call's real input (here: the ~70KB
+    # skill text in the system prompt) lands in cache_creation_input_tokens
+    # (first time) or cache_read_input_tokens (cache hit on a later call),
+    # not input_tokens -- confirmed live: input_tokens alone reported as 2
+    # while cache_creation_input_tokens was 30278 for the same call. Only
+    # counting input_tokens made the caller's output/input ratio safety
+    # check (translation-harness's max_token_ratio) see ~4882:1 and reject
+    # a completely normal call as a suspected runaway generation. All three
+    # figures reflect tokens that were genuinely part of the input context,
+    # cached or not, so all three belong in what gets reported back.
+    input_tokens = (
+        usage.get("input_tokens", 0)
+        + usage.get("cache_creation_input_tokens", 0)
+        + usage.get("cache_read_input_tokens", 0)
+    )
     cost = data.get("total_cost_usd") or 0.0
     duration_ms = data.get("duration_ms", 0)
 
