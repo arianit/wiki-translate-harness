@@ -97,6 +97,36 @@ def test_existing_templates_not_flagged():
     assert find_live_issues(parse_result) == []
 
 
+def test_known_harmless_missing_dependency_module_not_flagged():
+    """Moduli:WikidataIB/i18n is confirmed missing on sq.wikipedia but is
+    only a conditional dependency of the legitimate, existing
+    {{Authority control}} template -- not a translation defect, and not
+    fixable by re-prompting the model, so it must not block delivery."""
+    parse_result = {
+        "text": "<p>irrelevant</p>",
+        "templates": [
+            {"ns": 10, "title": "Stampa:Authority control", "exists": True},
+            {"ns": 828, "title": "Moduli:WikidataIB/i18n", "exists": False},
+        ],
+    }
+    assert find_live_issues(parse_result) == []
+
+
+def test_other_missing_modules_still_flagged():
+    """The known-harmless allowlist must not swallow genuinely missing
+    templates/modules unrelated to it."""
+    parse_result = {
+        "text": "<p>irrelevant</p>",
+        "templates": [
+            {"ns": 828, "title": "Moduli:WikidataIB/i18n", "exists": False},
+            {"ns": 828, "title": "Moduli:SomeOtherMissingModule", "exists": False},
+        ],
+    }
+    issues = find_live_issues(parse_result)
+    assert len(issues) == 1
+    assert "SomeOtherMissingModule" in issues[0].message
+
+
 def test_country_data_leak_detected_once_not_per_html_occurrence():
     # Regression: MediaWiki's redlink markup repeats the same leaked title
     # in the href query string, the title="" attribute, and the anchor's

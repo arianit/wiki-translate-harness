@@ -54,6 +54,19 @@ _ERROR_SPAN_RE = re.compile(
 )
 _COUNTRY_DATA_LEAK_RE = re.compile(r"Country[\s_-]data[\s_]\S+", re.IGNORECASE)
 
+# Dependency modules confirmed missing on sq.wikipedia that a legitimate,
+# EXISTING template can conditionally reach for, depending on which
+# Wikidata properties the linked item happens to have -- not a translation
+# defect, not fixable by rewriting wikitext, and not necessarily even a
+# visible break on the rendered page. {{Authority control}} (Stampa:Authority
+# control, which itself exists and renders correctly on real sq.wikipedia
+# articles, e.g. "Pjetër Bogdani") reaches for "Moduli:WikidataIB/i18n" only
+# for certain identifier types; confirmed missing via the API 2026-08-21.
+# Flagging this every time it's hit would only ever produce a permanently
+# unresolvable needs_human_review, since no amount of repair-round
+# re-prompting can create a missing module on the live target wiki.
+_KNOWN_HARMLESS_MISSING_DEPENDENCY_MODULES = {"Moduli:WikidataIB/i18n"}
+
 
 def _strip_html(s: str) -> str:
     return re.sub(r"<[^>]+>", "", s).strip()
@@ -144,6 +157,8 @@ def find_live_issues(parse_result: dict, source_text: str = "") -> list[Validati
     for template in parse_result.get("templates", []) or []:
         if template.get("exists") is False:
             title = template.get("title", "?")
+            if title in _KNOWN_HARMLESS_MISSING_DEPENDENCY_MODULES:
+                continue
             # search by the bare name (without namespace prefix) since
             # that's what appears in the wikitext, not "Stampa:X"/"Template:X"
             bare_name = title.split(":", 1)[-1]
