@@ -287,10 +287,17 @@ def run_claude_cli(
             log_dir, model=model, note="claude CLI reported is_error=true",
             stdout=proc.stdout, stderr=proc.stderr,
         )
+        # A CLI-level error (rate limits, spend limits, API errors) is
+        # often explained in the result event's own `result` text, not on
+        # the process's stderr stream, which can be completely empty --
+        # confirmed live: a "You've hit your monthly spend limit" rejection
+        # had empty proc.stderr, surfacing upstream as a bare "unknown
+        # error" with no way to tell a real account-level block apart from
+        # anything else without reading the diagnostic log by hand.
+        error_detail = proc.stderr or data.get("result") or "unknown error"
+        proc_stderr_with_log = error_detail
         if log_path:
-            proc_stderr_with_log = (proc.stderr or "") + f" (raw output logged to {log_path})"
-        else:
-            proc_stderr_with_log = proc.stderr or ""
+            proc_stderr_with_log += f" (raw output logged to {log_path})"
     else:
         proc_stderr_with_log = proc.stderr or ""
 
@@ -364,6 +371,16 @@ class ClaudeCodeClient:
             if "claude CLI not found" in result.stderr:
                 # A missing binary won't fix itself on retry.
                 raise ClaudeCodeError(result.stderr)
+            if result.raw.get("api_error_status") == 429:
+                # An account/org-level rate or spend limit (confirmed live:
+                # "You've hit your monthly spend limit", five_hour rate
+                # window, overage rejected) -- unlike a transient service
+                # hiccup, backing off and retrying within the same run
+                # cannot succeed, it just burns the retry budget's wall
+                # time (up to ~60s per attempt) for a guaranteed-identical
+                # rejection every time, observed across many chunks in a
+                # row.
+                raise ClaudeCodeError(f"rate/spend limit (HTTP 429): {result.stderr}")
             if attempt > self.max_retries:
                 raise ClaudeCodeError(
                     f"claude CLI call failed after {attempt} attempts: {result.stderr}"

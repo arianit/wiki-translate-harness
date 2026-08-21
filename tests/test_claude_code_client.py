@@ -287,3 +287,60 @@ def test_missing_cli_binary_reported_as_error():
 
     assert result.is_error
     assert "not found" in result.stderr
+
+
+def test_cli_error_falls_back_to_result_text_when_stderr_empty():
+    """Regression test for a real case: a rate/spend-limit rejection had a
+    completely empty proc.stderr, with the actual human-readable reason
+    ("You've hit your monthly spend limit...") only present in the result
+    event's own `result` field -- previously surfaced upstream as a bare,
+    undiagnosable "unknown error"."""
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from wiki_translate_harness.claude_code_client import run_claude_cli
+
+    events = [
+        {
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 429,
+            "result": "You've hit your monthly spend limit",
+            "usage": {},
+        },
+    ]
+    stdout = "\n".join(json.dumps(e) for e in events)
+
+    with patch(
+        "wiki_translate_harness.claude_code_client.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    ):
+        result = run_claude_cli("system", "user", model="claude-sonnet-5")
+
+    assert result.is_error
+    assert "monthly spend limit" in result.stderr
+    assert result.raw.get("api_error_status") == 429
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_429_fails_fast_without_retrying(monkeypatch):
+    """A 429 (rate/spend limit) cannot be fixed by backing off within the
+    same run -- must raise immediately instead of burning the full retry
+    budget's wall time on a guaranteed-identical rejection each time."""
+    calls = []
+
+    def fake(*a, **kw):
+        calls.append(1)
+        return ClaudeCLIResult(
+            is_error=True,
+            model_used="claude-sonnet-5",
+            stderr="You've hit your monthly spend limit",
+            raw={"api_error_status": 429},
+        )
+
+    monkeypatch.setattr("wiki_translate_harness.claude_code_client.run_claude_cli", fake)
+    client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
+    with pytest.raises(ClaudeCodeError, match="429"):
+        await client.chat_completion("claude-sonnet-5", _MESSAGES)
+    assert len(calls) == 1
