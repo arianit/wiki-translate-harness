@@ -51,6 +51,7 @@ def build_llm_client(config: Config) -> tuple[LLMEngineClient, str]:
             permission_mode=config.claude_code_permission_mode,
             timeout_s=config.request_timeout_s,
             max_retries=config.max_retries,
+            log_dir=config.log_dir,
         )
         return client, config.model
 

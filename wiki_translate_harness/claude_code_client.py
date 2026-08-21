@@ -22,7 +22,9 @@ import random
 import subprocess
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +39,22 @@ from wiki_translate_harness.openrouter import RetryCallback
 # block as it's produced; concatenating every `assistant` event's text
 # blocks, in order, reconstructs the true complete output regardless of how
 # many internal turns it took.
-_MIN_CHARS_PER_OUTPUT_TOKEN = 2.0
+#
+# stop_reason == "max_tokens" (the model ran out of its output budget
+# mid-response) is the *authoritative* truncation signal, straight from the
+# API -- checked first, below. The chars-per-token ratio is only a
+# secondary safety net for a different failure mode entirely: our own
+# stream-json parsing dropping/mangling a line so the reconstructed text is
+# short even though the model finished normally (stop_reason: end_turn).
+# mmtp's original 2.0 threshold (calibrated without much extended thinking
+# in the mix) turned out too strict for this use case: a live reproduction
+# against real Albanian wikitext output found a confirmed-genuine,
+# naturally-completed response (stop_reason: end_turn) at a 1.94 ratio,
+# while confirmed-truncated responses measured 0.24-1.14 (see mmtp's own
+# calibration notes) down to as low as 0.31-0.59 reproduced directly against
+# this project's own real failures before the stop_reason check existed.
+# 1.0 sits with real margin below the former and above the latter.
+_MIN_CHARS_PER_OUTPUT_TOKEN = 1.0
 _TRUNCATION_CHECK_MIN_OUTPUT_TOKENS = 2000
 
 
@@ -58,6 +75,31 @@ class ClaudeCLIResult:
     stderr: str = ""
 
 
+def _write_diagnostic_log(
+    log_dir: Path | str | None, *, model: str, note: str, stdout: str, stderr: str
+) -> str | None:
+    """Best-effort dump of a failed call's raw stream + stderr, so a bad
+    call can be diagnosed after the fact instead of needing a live,
+    real-money reproduction every time — see claude_code_client.py's git
+    history for exactly that cost, twice, before this existed. Never
+    raises — a logging failure must not break the actual call."""
+    if log_dir is None:
+        return None
+    try:
+        log_dir = Path(log_dir)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        log_path = log_dir / f"claude-cli-error-{timestamp}-{model}-{uuid.uuid4().hex[:8]}.log"
+        log_path.write_text(
+            f"note: {note}\nmodel: {model}\n\n--- stdout (raw stream-json) ---\n{stdout}\n\n"
+            f"--- stderr ---\n{stderr}\n",
+            encoding="utf-8",
+        )
+        return str(log_path)
+    except OSError:
+        return None
+
+
 def run_claude_cli(
     system_prompt: str,
     user_prompt: str,
@@ -65,6 +107,7 @@ def run_claude_cli(
     model: str,
     cli_path: str = "claude",
     permission_mode: str = "bypassPermissions",
+    log_dir: Path | str | None = None,
     timeout_s: float = 600.0,
 ) -> ClaudeCLIResult:
     """Single-shot, tool-less, blocking call — see ClaudeCodeClient.chat_completion
@@ -109,11 +152,14 @@ def run_claude_cli(
         finally:
             Path(system_prompt_path).unlink(missing_ok=True)
     except subprocess.TimeoutExpired as exc:
-        return ClaudeCLIResult(
-            is_error=True,
-            model_used=model,
-            stderr=f"claude CLI call timed out after {timeout_s}s: {exc}",
+        log_path = _write_diagnostic_log(
+            log_dir, model=model, note=f"timed out after {timeout_s}s",
+            stdout=exc.stdout or "", stderr=exc.stderr or "",
         )
+        stderr_msg = f"claude CLI call timed out after {timeout_s}s: {exc}"
+        if log_path:
+            stderr_msg += f" (raw output logged to {log_path})"
+        return ClaudeCLIResult(is_error=True, model_used=model, stderr=stderr_msg)
     except FileNotFoundError as exc:
         return ClaudeCLIResult(
             is_error=True,
@@ -142,11 +188,15 @@ def run_claude_cli(
             result_event = event
 
     if not saw_any_event or result_event is None:
-        return ClaudeCLIResult(
-            is_error=True,
-            model_used=model,
-            stderr=(proc.stderr or proc.stdout or "no output")[:2000],
+        log_path = _write_diagnostic_log(
+            log_dir, model=model,
+            note="no parseable stream-json events, or stream never reached a `result` event",
+            stdout=proc.stdout, stderr=proc.stderr,
         )
+        stderr_msg = (proc.stderr or proc.stdout or "no output")[:2000]
+        if log_path:
+            stderr_msg += f" (raw output logged to {log_path})"
+        return ClaudeCLIResult(is_error=True, model_used=model, stderr=stderr_msg)
 
     data = result_event
     reassembled_text = "".join(text_blocks)
@@ -188,27 +238,62 @@ def run_claude_cli(
     thinking_tokens = (usage.get("output_tokens_details") or {}).get("thinking_tokens", 0)
     visible_output_tokens = max(output_tokens - thinking_tokens, 0)
 
+    stop_reason = data.get("stop_reason")
+    if stop_reason == "max_tokens":
+        log_path = _write_diagnostic_log(
+            log_dir, model=model, note="stop_reason=max_tokens",
+            stdout=proc.stdout, stderr=proc.stderr,
+        )
+        stderr_msg = (
+            f"Truncated: the model hit its output token budget mid-response "
+            f"(stop_reason=max_tokens, {output_tokens} output tokens, "
+            f"{thinking_tokens} of them thinking)."
+        )
+        if log_path:
+            stderr_msg += f" (raw output logged to {log_path})"
+        return ClaudeCLIResult(
+            is_error=True, total_cost_usd=cost, input_tokens=input_tokens,
+            output_tokens=output_tokens, duration_ms=duration_ms, model_used=model,
+            raw=data, stderr=stderr_msg,
+        )
+
     if (
         visible_output_tokens >= _TRUNCATION_CHECK_MIN_OUTPUT_TOKENS
         and len(result_text) < visible_output_tokens * _MIN_CHARS_PER_OUTPUT_TOKEN
     ):
+        log_path = _write_diagnostic_log(
+            log_dir, model=model,
+            note=f"suspected content loss: {len(result_text)} chars for {visible_output_tokens} visible tokens",
+            stdout=proc.stdout, stderr=proc.stderr,
+        )
+        stderr_msg = (
+            f"Suspected content loss during stream reconstruction: model finished "
+            f"normally (stop_reason={stop_reason!r}) with {visible_output_tokens} "
+            f"non-thinking output tokens ({output_tokens} total, {thinking_tokens} "
+            f"thinking), but only {len(result_text)} chars of text were recovered "
+            "from the stream."
+        )
+        if log_path:
+            stderr_msg += f" (raw output logged to {log_path})"
         return ClaudeCLIResult(
-            is_error=True,
-            total_cost_usd=cost,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            duration_ms=duration_ms,
-            model_used=model,
-            raw=data,
-            stderr=(
-                f"Suspected truncated output: {visible_output_tokens} non-thinking output "
-                f"tokens ({output_tokens} total, {thinking_tokens} thinking) but only "
-                f"{len(result_text)} chars of text were recovered from the stream — "
-                "some content was likely lost."
-            ),
+            is_error=True, total_cost_usd=cost, input_tokens=input_tokens,
+            output_tokens=output_tokens, duration_ms=duration_ms, model_used=model,
+            raw=data, stderr=stderr_msg,
         )
 
     cli_reported_error = bool(data.get("is_error"))
+    if cli_reported_error:
+        log_path = _write_diagnostic_log(
+            log_dir, model=model, note="claude CLI reported is_error=true",
+            stdout=proc.stdout, stderr=proc.stderr,
+        )
+        if log_path:
+            proc_stderr_with_log = (proc.stderr or "") + f" (raw output logged to {log_path})"
+        else:
+            proc_stderr_with_log = proc.stderr or ""
+    else:
+        proc_stderr_with_log = proc.stderr or ""
+
     return ClaudeCLIResult(
         is_error=cli_reported_error,
         result_text=result_text,
@@ -218,7 +303,7 @@ def run_claude_cli(
         duration_ms=duration_ms,
         model_used=model,
         raw=data,
-        stderr=proc.stderr or "",
+        stderr=proc_stderr_with_log,
     )
 
 
@@ -230,12 +315,14 @@ class ClaudeCodeClient:
         permission_mode: str = "bypassPermissions",
         timeout_s: float = 600.0,
         max_retries: int = 5,
+        log_dir: Path | str | None = None,
     ):
         self.model = model
         self.cli_path = cli_path
         self.permission_mode = permission_mode
         self.timeout_s = timeout_s
         self.max_retries = max_retries
+        self.log_dir = log_dir
 
     async def chat_completion(
         self,
@@ -268,6 +355,7 @@ class ClaudeCodeClient:
                 cli_path=self.cli_path,
                 permission_mode=self.permission_mode,
                 timeout_s=self.timeout_s,
+                log_dir=self.log_dir,
             )
             if not result.is_error:
                 return result.result_text, result.input_tokens, result.output_tokens

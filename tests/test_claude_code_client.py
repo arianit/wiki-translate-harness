@@ -100,9 +100,11 @@ async def test_gives_up_after_max_retries(monkeypatch):
 
 
 def test_truncation_heuristic_flags_short_result_as_error():
-    """Ported truncation heuristic, exercised directly against
-    run_claude_cli's parsing logic via a hand-built stream-json payload,
-    since it's internal to that function rather than ClaudeCodeClient."""
+    """Ported truncation heuristic (secondary safety net for stream-parsing
+    content loss, not the primary stop_reason=max_tokens signal), exercised
+    directly against run_claude_cli's parsing logic via a hand-built
+    stream-json payload, since it's internal to that function rather than
+    ClaudeCodeClient."""
     import json
     import subprocess
     from unittest.mock import patch
@@ -122,7 +124,77 @@ def test_truncation_heuristic_flags_short_result_as_error():
         result = run_claude_cli("system", "user", model="claude-sonnet-5")
 
     assert result.is_error
-    assert "truncated" in result.stderr.lower()
+    assert "content loss" in result.stderr.lower()
+
+
+def test_max_tokens_stop_reason_flagged_as_truncated():
+    """stop_reason=max_tokens is the authoritative truncation signal
+    (straight from the API) -- must be flagged even when the reconstructed
+    text is nowhere near short enough to trip the chars-per-token safety
+    net on its own."""
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from wiki_translate_harness.claude_code_client import run_claude_cli
+
+    long_text = "x" * 20000
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": long_text}]}},
+        {
+            "type": "result",
+            "stop_reason": "max_tokens",
+            "usage": {"input_tokens": 100, "output_tokens": 8000},
+            "total_cost_usd": 0.2,
+        },
+    ]
+    stdout = "\n".join(json.dumps(e) for e in events)
+
+    with patch(
+        "wiki_translate_harness.claude_code_client.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    ):
+        result = run_claude_cli("system", "user", model="claude-sonnet-5")
+
+    assert result.is_error
+    assert "max_tokens" in result.stderr
+
+
+def test_end_turn_with_moderate_ratio_not_flagged():
+    """Regression test for a real false positive: a genuinely complete,
+    naturally-finished response (stop_reason: end_turn) at a ~1.3
+    chars/token ratio -- below mmtp's original 2.0 threshold but above the
+    lowered 1.0 -- confirmed live that Albanian wikitext output can
+    legitimately run this dense (a real reproduction measured 1.94 for a
+    confirmed-complete response) -- must not be flagged. Uses output_tokens
+    above the 2000 noise floor so the ratio check actually runs."""
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from wiki_translate_harness.claude_code_client import run_claude_cli
+
+    text = "x" * 4000  # 4000 chars / 3000 visible tokens = 1.33 -- between 1.0 and 2.0
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}},
+        {
+            "type": "result",
+            "is_error": False,
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 100, "output_tokens": 3000},
+            "total_cost_usd": 0.1,
+        },
+    ]
+    stdout = "\n".join(json.dumps(e) for e in events)
+
+    with patch(
+        "wiki_translate_harness.claude_code_client.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    ):
+        result = run_claude_cli("system", "user", model="claude-sonnet-5")
+
+    assert not result.is_error
+    assert result.result_text == text
 
 
 def test_thinking_tokens_excluded_from_truncation_check():
