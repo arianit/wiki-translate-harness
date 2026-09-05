@@ -67,7 +67,7 @@ def build_config(
     # just covering the case where config.yaml never had a model at all.
     if "model" not in data:
         provider = data.get("provider", "claude_code")
-        data["model"] = "claude-sonnet-5" if provider == "claude_code" else "deepseek/deepseek-v3"
+        data["model"] = "claude-sonnet-5" if provider == "claude_code" else "deepseek/deepseek-v3.2"
 
     config = Config.model_validate(data)
 

@@ -42,6 +42,7 @@ def _build_overrides(
     live_validate: Optional[bool] = None,
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
+    sequential: Optional[bool] = None,
 ) -> dict:
     overrides = {
         "model": model,
@@ -53,6 +54,7 @@ def _build_overrides(
         "repair": repair,
         "live_validate": live_validate,
         "provider": provider,
+        "sequential": sequential,
     }
     overrides = {k: v for k, v in overrides.items() if v is not None}
     if base_url is not None:
@@ -78,7 +80,7 @@ def main(
     file: Optional[Path] = typer.Option(None, "--file", help="Local .wiki/.txt file with raw source wikitext"),
     directory: Optional[Path] = typer.Option(None, "--directory", help="Directory of local .wiki/.txt files"),
     model: Optional[str] = typer.Option(
-        None, "--model", help="Model id, e.g. deepseek/deepseek-v3 (OpenRouter) or a local model name"
+        None, "--model", help="Model id, e.g. deepseek/deepseek-v3.2 (OpenRouter) or a local model name"
     ),
     provider: Optional[str] = typer.Option(
         None, "--provider",
@@ -89,6 +91,12 @@ def main(
         None, "--base-url", help="Override the active provider's base URL (pair with --provider local)"
     ),
     workers: Optional[int] = typer.Option(None, "--workers", help="Concurrent section-translation workers"),
+    sequential: Optional[bool] = typer.Option(
+        None, "--sequential/--no-sequential",
+        help="Process articles one at a time (still up to --workers concurrent chunks within "
+        "each) instead of starting every requested article concurrently. Use with multiple "
+        "--titles to bound a mid-run failure (e.g. a provider rate limit) to one article.",
+    ),
     temperature: Optional[float] = typer.Option(None, "--temperature"),
     max_retries: Optional[int] = typer.Option(None, "--max-retries"),
     cache: Optional[bool] = typer.Option(None, "--cache/--no-cache"),
@@ -111,7 +119,8 @@ def main(
         raise typer.Exit(code=1)
 
     overrides = _build_overrides(
-        model, workers, temperature, max_retries, cache, validate, repair, live_validate, provider, base_url
+        model, workers, temperature, max_retries, cache, validate, repair, live_validate, provider, base_url,
+        sequential,
     )
     cfg = build_config(config_path, overrides)
 

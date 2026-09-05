@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 from wiki_translate_harness.config import Config
+from wiki_translate_harness.progress import ProgressReporter
 from wiki_translate_harness.sources import ArticleInput, parse_source_ref
 from wiki_translate_harness.statistics import StatsTracker
 
@@ -55,11 +56,19 @@ async def run_queue_mode(
         logger.info("Claimed queue line %d: %s", line_no, url)
 
         article_stats = StatsTracker()
+        # Constructed but never entered as a context manager -- refresh()
+        # no-ops whenever self._live is None (only set inside __enter__),
+        # so this is a pure event emitter with zero Rich rendering
+        # overhead. Gives queue-mode runs (this nightly-cron path has no
+        # interactive terminal) the same per-chunk/per-article visibility
+        # in logs/run.log that the interactive CLI gets from its Live table.
+        reporter = ProgressReporter(article_stats.stats, config.workers, on_event=logger.info)
         try:
             await run_pipeline(
                 config,
                 [ArticleInput(title=title, source_lang=lang)],
                 force=True,  # the queue is the source of truth for done/failed, not output_dir presence
+                reporter=reporter,
                 stats_tracker=article_stats,
             )
         except Exception as exc:  # noqa: BLE001 - must still record FAILED and move on to the next article

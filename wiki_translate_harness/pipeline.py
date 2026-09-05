@@ -7,12 +7,14 @@ output.py. Contains no translation logic of its own.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import re
 import time
 
 import httpx
 
-from wiki_translate_harness.cache import TranslationCache, VerificationCache
+from wiki_translate_harness.cache import TranslationCache, VerificationCache, compute_key
 from wiki_translate_harness.engines import LLMEngineClient, build_llm_client
 from wiki_translate_harness.citation_language import (
     dedupe_short_footnotes,
@@ -35,7 +37,14 @@ from wiki_translate_harness.models import (
     ValidationResult,
 )
 from wiki_translate_harness.openrouter import RetryCallback
-from wiki_translate_harness.output import article_already_done, assemble_chunks, assemble_chunks_with_spans, save_article
+from wiki_translate_harness.output import (
+    article_already_done,
+    assemble_chunks,
+    assemble_chunks_with_spans,
+    discard_partial_article,
+    save_article,
+    save_partial_article,
+)
 from wiki_translate_harness.parser import build_chunks, split_into_sections
 from wiki_translate_harness.progress import ProgressReporter
 from wiki_translate_harness.report import ArticleReportData, build_article_report, save_report
@@ -46,7 +55,7 @@ from wiki_translate_harness.sources import ArticleInput, load_article_source
 from wiki_translate_harness.statistics import StatsTracker
 from wiki_translate_harness.translator import translate_chunk
 from wiki_translate_harness.validator import format_errors, validate_wikitext
-from wiki_translate_harness.verification import VerifiedFacts, verify_wikitext
+from wiki_translate_harness.verification import VerifiedFacts, build_verified_facts_block, verify_wikitext
 
 logger = logging.getLogger("wiki_translate_harness.pipeline")
 
@@ -94,6 +103,18 @@ async def _validate_assembled(
     return issues
 
 
+_QUOTE_TEMPLATE_RE = re.compile(r"\{\{\s*([\'\"`]+(?:\s+[\'\"`]+)*)\s*\}\}")
+
+
+def normalize_quote_templates(text: str) -> str:
+    """Normalize English Wikipedia quote/spacing shortcut templates
+    (e.g. {{'"}}, {{"'}}, {{' "}}, {{`}}) to their literal punctuation characters.
+    These typography templates do not exist on other wikis (like sqwiki) and
+    trigger unexpanded template warnings if left unexpanded.
+    """
+    return _QUOTE_TEMPLATE_RE.sub(r"\g<1>", text)
+
+
 async def run_assembly_repair(
     chunks: list[Chunk],
     source: ArticleSource,
@@ -105,6 +126,8 @@ async def run_assembly_repair(
     citation_client: httpx.AsyncClient | None,
     stats: RunStats,
     on_retry: RetryCallback | None = None,
+    cache: TranslationCache | None = None,
+    facts: VerifiedFacts | None = None,
 ) -> tuple[str, list[ValidationIssue], int, dict[str, str]]:
     """Post-processes and validates the assembled article, repairing only
     the chunks implicated by each round's findings, up to
@@ -192,6 +215,8 @@ async def run_assembly_repair(
             except Exception as exc:
                 logger.warning("Short-footnote dedup failed for %r: %s", source.title, exc)
 
+        text = normalize_quote_templates(text)
+
         return text
 
     assembled = await _post_process(assemble_chunks(chunks))
@@ -247,6 +272,18 @@ async def run_assembly_repair(
                 stats.estimated_cost_usd += repair_result.cost_usd
                 stats.translation_time_s += repair_result.latency_s
                 chunk.translated_text = repair_result.text
+                if cache is not None:
+                    # Without this, a fix made here is invisible to future
+                    # reruns' cache lookups: translate_chunk's own cache.set
+                    # already ran (pre-repair) when this chunk was first
+                    # translated, so re-caching now with the same key
+                    # overwrites that stale entry with the repaired text.
+                    facts_block = build_verified_facts_block(chunk.text, facts) if facts else ""
+                    facts_hash = hashlib.sha256(facts_block.encode("utf-8")).hexdigest()[:16] if facts_block else ""
+                    key = compute_key(
+                        config.model, chunk.source_lang, config.target_lang, chunk.text, skill.content_hash, facts_hash
+                    )
+                    cache.set(key, config.model, chunk.source_lang, config.target_lang, chunk.text, chunk.translated_text)
             except Exception as exc:
                 logger.warning(
                     "Assembly-level repair failed for %r chunk %d (round %d): %s",
@@ -444,6 +481,10 @@ async def run_pipeline(
                     article_stats['input_tokens'] += outcome.prompt_tokens
                     article_stats['output_tokens'] += outcome.completion_tokens
                     article_stats['chunks_done'] += 1
+                    logger.info(
+                        "Chunk done: %s — %s (%d/%d) [%s]",
+                        source.title, chunk.section_title, article_stats['chunks_done'], len(chunks), chunk.status.value,
+                    )
                     # Check token ratio limit
                     if config.max_token_ratio > 0 and article_stats['input_tokens'] > 0:
                         ratio = article_stats['output_tokens'] / article_stats['input_tokens']
@@ -469,6 +510,7 @@ async def run_pipeline(
                         reporter.on_chunk_done(slot_id)
                     slot_queue.put_nowait(slot_id)
                     stats_tracker.write(config.stats_path)
+                    save_partial_article(config.partial_output_dir, source.title, chunks)
 
             # Execute chunk translation with overall article timeout
             try:
@@ -508,13 +550,14 @@ async def run_pipeline(
                     source.title, len(failed_chunks), len(chunks)
                 )
                 if reporter is not None:
-                    reporter.on_article_done()
+                    reporter.on_article_done(source.title, "failed")
                 return
 
             # All chunks succeeded, proceed with assembly and post-processing
             target_mw_client = mw_pool.get(config.target_lang)
             assembled, combined_issues, rounds_used, citation_languages_filled = await run_assembly_repair(
-                chunks, source, config, llm_client, skill, pricing, target_mw_client, citation_client, stats, on_retry
+                chunks, source, config, llm_client, skill, pricing, target_mw_client, citation_client, stats, on_retry,
+                cache, facts,
             )
 
             if combined_issues:
@@ -528,7 +571,7 @@ async def run_pipeline(
                     "; ".join(f"{i.kind}: {i.message}" for i in combined_issues),
                 )
                 if reporter is not None:
-                    reporter.on_article_done()
+                    reporter.on_article_done(source.title, "needs_human_review")
                 return
 
             # Add attribution block as HTML comment at the bottom of the file
@@ -539,6 +582,7 @@ async def run_pipeline(
             path = save_article(config.output_dir, source.title, assembled)
             stats.articles_completed += 1
             logger.info("Saved %s", path)
+            discard_partial_article(config.partial_output_dir, source.title)
 
             if config.generate_reports:
                 report_text = build_article_report(
@@ -554,11 +598,15 @@ async def run_pipeline(
                 logger.info("Saved %s", report_path)
 
             if reporter is not None:
-                reporter.on_article_done()
+                reporter.on_article_done(source.title, "completed")
 
-        await asyncio.gather(
-            *(process_article(source, chunks, facts) for source, chunks, facts in article_plans)
-        )
+        if config.sequential:
+            for source, chunks, facts in article_plans:
+                await process_article(source, chunks, facts)
+        else:
+            await asyncio.gather(
+                *(process_article(source, chunks, facts) for source, chunks, facts in article_plans)
+            )
 
     finally:
         await mw_pool.aclose()

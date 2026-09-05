@@ -19,16 +19,17 @@ def test_env_var_supplies_api_key(monkeypatch):
     assert cfg.openrouter_api_key == "sk-test"
 
 
-def test_default_provider_is_claude_code():
+def test_default_provider_and_workers():
     cfg = build_config(None, _CONTACT)
     assert cfg.provider == "claude_code"
     assert cfg.model == "claude-sonnet-5"
+    assert cfg.workers == 4
 
 
 def test_switching_to_openrouter_without_model_gets_openrouter_default(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
     cfg = build_config(None, {**_CONTACT, "provider": "openrouter"})
-    assert cfg.model == "deepseek/deepseek-v3"
+    assert cfg.model == "deepseek/deepseek-v3.2"
 
 
 def test_explicit_model_survives_provider_switch(monkeypatch):

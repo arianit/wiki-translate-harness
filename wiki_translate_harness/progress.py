@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -54,12 +55,23 @@ def _fmt_duration(seconds: float | None) -> str:
 
 
 class ProgressReporter:
-    def __init__(self, stats: RunStats, workers: int, console: Console | None = None):
+    def __init__(
+        self,
+        stats: RunStats,
+        workers: int,
+        console: Console | None = None,
+        on_event: Callable[[str], None] | None = None,
+    ):
         self.stats = stats
         self.state = ProgressState()
         self.slots = [WorkerSlot(slot_id=i) for i in range(workers)]
         self.console = console or Console()
         self._live: Live | None = None
+        # Optional one-line-per-event text sink, independent of the Rich
+        # Live table below — e.g. queue_runner.py wires this to logger.info
+        # so non-interactive runs (which never enter/render Live) still get
+        # human-readable per-chunk/per-article progress in logs/run.log.
+        self.on_event = on_event
 
     def __enter__(self) -> "ProgressReporter":
         self._live = Live(self._render(), console=self.console, refresh_per_second=4, transient=False)
@@ -84,6 +96,8 @@ class ProgressReporter:
         self.refresh()
 
     def on_chunk_start(self, slot_id: int, article: str, section: str) -> None:
+        if self.on_event:
+            self.on_event(f"worker {slot_id}: start '{article}' — {section}")
         slot = self.slots[slot_id]
         slot.article, slot.section, slot.action = article, section, "translating"
         self.refresh()
@@ -94,17 +108,29 @@ class ProgressReporter:
 
     def on_chunk_done(self, slot_id: int) -> None:
         slot = self.slots[slot_id]
+        if self.on_event:
+            self.on_event(
+                f"worker {slot_id}: done '{slot.article}' — {slot.section} | "
+                f"cumulative: {self.stats.sections_translated} sections, "
+                f"{self.stats.cache_hits} cache hits, ${self.stats.estimated_cost_usd:.4f}"
+            )
         slot.action = "idle"
         slot.article, slot.section = "", ""
         self.state.chunks_done += 1
         self.refresh()
 
-    def on_article_done(self) -> None:
+    def on_article_done(self, article: str, outcome: str) -> None:
+        if self.on_event:
+            self.on_event(
+                f"article '{article}' {outcome} ({self.state.articles_done + 1}/{self.state.total_articles})"
+            )
         self.state.articles_done += 1
         self.refresh()
 
     def on_retry(self, model: str, attempt: int, reason: str, delay: float) -> None:
         self.state.last_retry = f"retry {attempt} ({reason}) in {delay:.1f}s [{model}]"
+        if self.on_event:
+            self.on_event(self.state.last_retry)
         self.refresh()
 
     # --- rendering ---

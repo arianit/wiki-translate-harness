@@ -89,6 +89,22 @@ def test_unexpanded_template_detected_from_templates_list():
     assert "NonExistentTemplateXYZ" in issues[0].message
 
 
+def test_unexpanded_template_locates_template_syntax_not_prose_word():
+    """Regression test: a missing template named '\"' or 'Main' must match
+    the actual {{'\"}} or {{Main}} template invocation, not an unrelated
+    prose word or quote mark earlier in the article."""
+    source_text = "Line 1 has 'quotes' here.\nLine 2 has {{'\"}} template.\nLine 3 is end."
+    parse_result = {
+        "text": "<p>irrelevant</p>",
+        "templates": [{"ns": 10, "title": "Stampa:'\"", "exists": False}],
+    }
+    issues = find_live_issues(parse_result, source_text=source_text)
+    assert len(issues) == 1
+    assert issues[0].line_number == 2
+    assert issues[0].snippet == "{{'\"}} template."
+
+
+
 def test_existing_templates_not_flagged():
     parse_result = {
         "text": "<p>irrelevant</p>",

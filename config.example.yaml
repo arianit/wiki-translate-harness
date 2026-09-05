@@ -9,11 +9,12 @@
 # `--provider local`; --model and --workers work the same across all three.
 # If you switch provider without also setting model below, config.py picks
 # a provider-appropriate default (claude-sonnet-5 for claude_code,
-# deepseek/deepseek-v3 otherwise) rather than silently reusing whatever
+# deepseek/deepseek-v3.2 otherwise) rather than silently reusing whatever
 # model id you had for the other provider.
 provider: claude_code
 model: claude-sonnet-5
 workers: 4
+sequential: true
 temperature: 0
 max_retries: 5
 cache: true
@@ -139,7 +140,7 @@ dedupe_short_footnotes: true
 # Article-level limits to skip articles that take too long or consume too many tokens.
 # Timeout for translation phase only (fetching, verification, and post‑processing are
 # separately bounded by request_timeout_s, verification_timeout_s, citation_fill_timeout_s).
-article_timeout_s: 1800  # 30 minutes per article
+article_timeout_s: 3600  # 1 hour per article (with workers=4 + openrouter's true concurrency)
 
 # Maximum allowed ratio of output tokens to input tokens per article.
 # A ratio > 1 is expected (translation often expands text), but extremely high ratios

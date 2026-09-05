@@ -90,6 +90,31 @@ def _locate(source_text: str, needle: str) -> tuple[int | None, str | None]:
     return line, snippet
 
 
+def _locate_template(source_text: str, bare_name: str) -> tuple[int | None, str | None]:
+    """Locate a template invocation in wikitext (e.g. {{name}} or {{name|...).
+
+    Matches {{bare_name or {{Template:bare_name rather than bare_name alone,
+    preventing common-word or punctuation template names (e.g. '"', 'Main')
+    from false-matching unrelated prose or punctuation in earlier chunks.
+    """
+    if not bare_name:
+        return None, None
+    pattern = re.compile(
+        rf"\{{\{{\s*(?:[A-Za-z0-9_]+:)?{re.escape(bare_name)}\s*([\|}}])",
+        re.IGNORECASE,
+    )
+    match = pattern.search(source_text)
+    if match:
+        offset = match.start()
+        line = source_text.count("\n", 0, offset) + 1
+        line_end = source_text.find("\n", offset)
+        snippet = source_text[offset : line_end if line_end != -1 else None].strip()
+        if len(snippet) > _SNIPPET_MAX:
+            snippet = snippet[: _SNIPPET_MAX - 1] + "…"
+        return line, snippet
+    return _locate(source_text, bare_name)
+
+
 def find_live_issues(parse_result: dict, source_text: str = "") -> list[ValidationIssue]:
     """Pure function over an action=parse response (see
     MediaWikiClient.parse_wikitext) — no network, easy to unit test with a
@@ -162,7 +187,7 @@ def find_live_issues(parse_result: dict, source_text: str = "") -> list[Validati
             # search by the bare name (without namespace prefix) since
             # that's what appears in the wikitext, not "Stampa:X"/"Template:X"
             bare_name = title.split(":", 1)[-1]
-            line, snippet = _locate(source_text, bare_name)
+            line, snippet = _locate_template(source_text, bare_name)
             issues.append(
                 ValidationIssue(
                     kind="unexpanded_template",

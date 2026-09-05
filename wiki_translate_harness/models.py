@@ -182,6 +182,13 @@ class Config(BaseModel):
     provider: str = "claude_code"
     model: str = "claude-sonnet-5"
     workers: int = 4
+    # Process articles one at a time (still using up to `workers` concurrent
+    # chunk translations within each article) instead of starting every
+    # requested article's chunks concurrently. Bounds the blast radius of a
+    # mid-run failure (e.g. a provider rate/session limit) to the single
+    # article in flight, and makes multi-article runs easier to reason
+    # about/resume. See run_pipeline()'s article-dispatch branch.
+    sequential: bool = True
     temperature: float = 0.0
     max_retries: int = 5
     cache: bool = True
@@ -241,6 +248,12 @@ class Config(BaseModel):
     cache_db_path: Path = Path("cache") / "translation_memory.sqlite3"
     log_dir: Path = Path("logs")
     stats_path: Path = Path("stats.json")
+    # Local-only "kill-safe" snapshot of in-progress articles — rewritten
+    # after every chunk, deleted once save_article() succeeds. Never
+    # shared/synced (unlike output_dir, a cross-machine directory that must
+    # hold only finished, reviewed translations) so a partial/WIP article
+    # never reaches another consumer of that shared queue.
+    partial_output_dir: Path = Path("partial_output")
 
     # Harness-side link/template verification against Wikidata + the target
     # wiki (see verification.py) — the harness's own, growing equivalent of
@@ -282,7 +295,20 @@ class Config(BaseModel):
     # Maximum allowed time (seconds) to spend translating a single article (excluding
     # verification and post-processing). If translation exceeds this limit, the article is
     # marked as failed and the harness moves on to the next article.
-    article_timeout_s: float = 1800.0  # 30 minutes
+    # Was 1800s, then 7200s while `provider: claude_code` + workers=1 forced
+    # every chunk of an article through one serialized CLI subprocess call
+    # (a 39-section article needed more than 1800s that way). Now that the
+    # default config is `provider: openrouter` + workers=4 -- true
+    # concurrent HTTP calls, not CLI-subprocess-serialized -- wall-clock
+    # cost per article drops substantially, so this comes back down to
+    # 3600s rather than staying at the workers=1 figure. Not quartered back
+    # to 1800s: openrouter's own 429/5xx backoff retries (unlike
+    # claude_code_client.py, which fails fast and never retries) now
+    # genuinely consume time inside this same per-article budget, so some
+    # headroom above the old default is kept. Single constant, not a
+    # `workers`-derived formula, since workers is meant to be tunable
+    # per-run without silently starving this budget.
+    article_timeout_s: float = 3600.0  # 1 hour
 
     # Maximum allowed ratio of output tokens to input tokens per article.
     # A ratio > 1 is expected (translation often expands text), but extremely high ratios
@@ -339,6 +365,7 @@ class Config(BaseModel):
         "cache_db_path",
         "log_dir",
         "stats_path",
+        "partial_output_dir",
         "verification_db_path",
         mode="before",
     )

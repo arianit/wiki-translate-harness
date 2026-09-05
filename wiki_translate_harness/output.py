@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from wiki_translate_harness.models import Chunk
+from wiki_translate_harness.models import Chunk, ChunkStatus
 
 _UNSAFE_RE = re.compile(r'[\\/:*?"<>|]')
 
@@ -72,3 +72,38 @@ def save_article(output_dir: Path, title: str, wikitext: str) -> Path:
     path = output_path_for(output_dir, title)
     path.write_text(wikitext, encoding="utf-8")
     return path
+
+
+_DONE_CHUNK_STATUSES = {ChunkStatus.TRANSLATED, ChunkStatus.CACHED, ChunkStatus.REPAIRED}
+
+
+def assemble_chunks_partial(chunks: list[Chunk]) -> str:
+    """Like assemble_chunks, but a chunk that hasn't succeeded yet
+    (PENDING/FAILED) is replaced with an inert HTML-comment placeholder
+    naming its section instead of silently contributing nothing — so a
+    partial snapshot never reads as if content were dropped. Only used for
+    partial_output_dir; never for the real output_dir save."""
+    shadow = [
+        chunk if chunk.status in _DONE_CHUNK_STATUSES
+        else chunk.model_copy(update={
+            "translated_text": f"<!-- pending: {chunk.section_title} ({chunk.status.value}) -->"
+        })
+        for chunk in chunks
+    ]
+    return assemble_chunks(shadow)
+
+
+def save_partial_article(partial_output_dir: Path, title: str, chunks: list[Chunk]) -> Path:
+    """Kill-safe snapshot of an in-progress article, rewritten after every
+    chunk. Atomic tmp-write + replace so a process killed mid-write can
+    never leave a truncated partial file behind."""
+    partial_output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_path_for(partial_output_dir, title)
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(assemble_chunks_partial(chunks), encoding="utf-8")
+    tmp_path.replace(path)
+    return path
+
+
+def discard_partial_article(partial_output_dir: Path, title: str) -> None:
+    output_path_for(partial_output_dir, title).unlink(missing_ok=True)

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from wiki_translate_harness.cache import TranslationCache, compute_key
 from wiki_translate_harness.models import Chunk, Config, RunStats
 from wiki_translate_harness.pipeline import run_assembly_repair
 from wiki_translate_harness.skill_loader import SkillContent
@@ -239,3 +240,49 @@ async def test_unlocalized_issue_reaches_every_chunk():
     for call in client.calls:
         user_message = call[-1]["content"]
         assert "Gabim citimi" in user_message
+
+
+@pytest.mark.asyncio
+async def test_repaired_chunk_is_re_cached(tmp_path: Path):
+    # translate_chunk's own cache.set (translator.py) runs pre-repair, when
+    # a chunk is first translated. Without re-caching here, a fix made by
+    # this assembly-level loop is invisible to future reruns' cache lookups
+    # — this proves the fix actually reaches the cache under the same key
+    # translate_chunk/translator.py would look it up with.
+    chunk = _chunk("{{harvc|last=Smith}}")
+    client = FakeOpenRouterClient(["{{Cite book|last=Smith}}"])
+    stats = RunStats()
+    cache = TranslationCache(tmp_path / "cache.sqlite3")
+    config = _config(max_assembly_repair_rounds=3)
+    skill = _skill()
+
+    try:
+        await run_assembly_repair(
+            [chunk], _FakeSource(), config, client, skill, None,
+            FakeMediaWikiClient(raise_if_called=True), None, stats,
+            cache=cache, facts=None,
+        )
+
+        key = compute_key(config.model, chunk.source_lang, config.target_lang, chunk.text, skill.content_hash, "")
+        assert cache.get(key) == chunk.translated_text
+        assert "harvc" not in cache.get(key)
+    finally:
+        cache.close()
+
+
+@pytest.mark.asyncio
+async def test_no_cache_arg_skips_re_caching_without_error():
+    # cache defaults to None (matches every pre-existing call site above,
+    # none of which pass it) -- must not raise just because a repair
+    # happened with no cache configured.
+    chunk = _chunk("{{harvc|last=Smith}}")
+    client = FakeOpenRouterClient(["{{Cite book|last=Smith}}"])
+    stats = RunStats()
+
+    _, issues, rounds, _ = await run_assembly_repair(
+        [chunk], _FakeSource(), _config(max_assembly_repair_rounds=3), client, _skill(), None,
+        FakeMediaWikiClient(raise_if_called=True), None, stats,
+    )
+
+    assert issues == []
+    assert rounds == 1
