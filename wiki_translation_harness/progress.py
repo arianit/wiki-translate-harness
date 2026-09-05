@@ -10,7 +10,7 @@ from rich.console import Console, Group
 from rich.live import Live
 from rich.table import Table
 
-from wiki_translate_harness.models import RunStats
+from wiki_translation_harness.models import RunStats
 
 
 @dataclass

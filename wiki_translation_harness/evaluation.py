@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from wiki_translate_harness.openrouter import OpenRouterClient, OpenRouterError
+from wiki_translation_harness.openrouter import OpenRouterClient, OpenRouterError
 
 EVALUATION_CRITERIA = """
 You are an expert Albanian Wikipedia editor and translator evaluator.
@@ -258,7 +258,7 @@ async def evaluate_translations(
     translations: dict[str, str],  # model_id -> translation wikitext
     openrouter_api_key: str,
     openrouter_base_url: str = "https://openrouter.ai/api/v1",
-    user_agent: str = "wiki-translate-harness-evaluation",
+    user_agent: str = "wiki-translation-harness-evaluation",
     timeout: float = 300.0,
     provider: str = "openrouter",
 ) -> tuple[EvaluationResult | None, str | None]:

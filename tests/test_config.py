@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from wiki_translate_harness.config import build_config
+from wiki_translation_harness.config import build_config
 
 _CONTACT = {"wikimedia_contact": "test@example.com"}
 

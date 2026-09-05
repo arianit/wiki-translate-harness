@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from wiki_translate_harness.config import resolve_llm_endpoint
-from wiki_translate_harness.models import Config, ModelPricing
-from wiki_translate_harness.openrouter import OpenRouterClient, RetryCallback
+from wiki_translation_harness.config import resolve_llm_endpoint
+from wiki_translation_harness.models import Config, ModelPricing
+from wiki_translation_harness.openrouter import OpenRouterClient, RetryCallback
 
 
 class LLMEngineClient(Protocol):
@@ -43,7 +43,7 @@ def build_llm_client(config: Config) -> tuple[LLMEngineClient, str]:
     if config.provider == "claude_code":
         # Local import: keeps claude_code_client.py's subprocess/tempfile
         # imports out of the path for anyone only ever using openrouter/local.
-        from wiki_translate_harness.claude_code_client import ClaudeCodeClient
+        from wiki_translation_harness.claude_code_client import ClaudeCodeClient
 
         client = ClaudeCodeClient(
             model=config.model,

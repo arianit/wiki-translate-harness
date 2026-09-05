@@ -12,7 +12,7 @@
 # deepseek/deepseek-v3.2 otherwise) rather than silently reusing whatever
 # model id you had for the other provider.
 provider: claude_code
-model: claude-sonnet-5
+# No `model:` here either, for the same reason -- let it auto-derive.
 workers: 4
 sequential: true
 temperature: 0
@@ -31,11 +31,11 @@ chunk_max_tokens: 2500
 
 # Directory (or list of directories) containing SKILL.md for the Pi skill.
 # The skill is split across three directories — enwiki-sqwiki-translation
-# (translate), wikiterms (terminology/link verification), wikiqa (pre-delivery
+# (translation), wikiterms (terminology/link verification), wikiqa (pre-delivery
 # checklist) — that an interactive agent invokes on demand via a Skill tool.
 # This harness has no such mechanism, so it loads all three up front and
-# concatenates them into one system prompt; list translate first, since its
-# content frames the other two. A single path (just translate) also still
+# concatenates them into one system prompt; list translation first, since its
+# content frames the other two. A single path (just translation) also still
 # works, e.g. if you want the harness's own verification.py to fully replace
 # wikiterms's role instead of also sending the model that skill's text.
 skill_path:
@@ -44,7 +44,7 @@ skill_path:
   - ~/.claude/skills/wikiqa
 # On: sqwiki-verified.md's confirmed template names/params reach the model.
 # Costs more tokens per request; off falls back to guessing on anything not
-# covered by the harness's own live verification (see wiki_translate_harness/verification.py).
+# covered by the harness's own live verification (see wiki_translation_harness/verification.py).
 include_skill_references: true
 # Pin the skill(s) to a committed git revision instead of the working tree, so
 # local uncommitted edits in the skill's own repo don't silently change
@@ -53,10 +53,10 @@ include_skill_references: true
 # tree instead.
 skill_git_ref: HEAD
 
-# Defaults into the shared wiki-translate-queue repo's output/ folder, same
+# Defaults into the shared wiki-translation-queue repo's output/ folder, same
 # place wikitranslateautorun/mmtp/wikipedia-articles-translation put theirs.
 # Point at a plain local `output` instead if you don't want that.
-output_dir: ~/code/wiki-translate-queue/output
+output_dir: ~/code/wiki-translation-queue/output
 cache_db_path: cache/translation_memory.sqlite3
 log_dir: logs
 stats_path: stats.json
@@ -90,11 +90,11 @@ request_timeout_s: 600
 # en.wikipedia.org, sq.wikipedia.org, and wikidata.org — an email or URL
 # where the operator of this tool can be reached.
 # (https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)
-wikimedia_tool_name: wiki-translate-harness
+wikimedia_tool_name: wiki-translation-harness
 wikimedia_contact: you@example.com
 
 # Harness-side link/template verification against Wikidata + the target
-# wiki (see wiki_translate_harness/verification.py) — the harness's own,
+# wiki (see wiki_translation_harness/verification.py) — the harness's own,
 # growing equivalent of the skill's sqwiki-verified.md, fed into each
 # chunk's translation request as pre-checked facts instead of the model
 # having to guess. Persisted in verification_db_path across runs.
@@ -128,7 +128,7 @@ max_assembly_repair_rounds: 3
 # back to English CS1 equivalents (|titulli= -> |title=, etc). Also
 # reconciles {{sfn}}/{{harvnb}} calls whose |ps= quote diverged because the
 # same source citation was split across independently-translated chunks.
-# See wiki_translate_harness/citation_language.py.
+# See wiki_translation_harness/citation_language.py.
 fill_citation_languages: true
 max_citation_url_fetches: 40
 citation_fetch_concurrency: 5

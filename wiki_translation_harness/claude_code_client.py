@@ -28,8 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from wiki_translate_harness.models import EngineError, ModelPricing
-from wiki_translate_harness.openrouter import RetryCallback
+from wiki_translation_harness.models import EngineError, ModelPricing
+from wiki_translation_harness.openrouter import RetryCallback
 
 # See mmtp/claude_cli.py's module docstring for the full incident writeup:
 # plain `--output-format json`'s `result` field only reflects the LAST

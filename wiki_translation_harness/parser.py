@@ -12,7 +12,7 @@ import re
 import mwparserfromhell as mwp
 import tiktoken
 
-from wiki_translate_harness.models import Chunk, Section
+from wiki_translation_harness.models import Chunk, Section
 
 _ENCODING = tiktoken.get_encoding("cl100k_base")
 

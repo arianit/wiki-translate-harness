@@ -14,7 +14,7 @@ from typing import Callable
 
 import httpx
 
-from wiki_translate_harness.models import EngineError, ModelPricing, TranslationResult
+from wiki_translation_harness.models import EngineError, ModelPricing, TranslationResult
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
@@ -54,7 +54,7 @@ class OpenRouterClient:
             # OpenRouter-specific attribution headers; meaningless (and
             # unwanted) against a local OpenAI-compatible server.
             headers["HTTP-Referer"] = "https://github.com/arianit/enwiki-sqwiki-translation"
-            headers["X-Title"] = "wiki-translate-harness"
+            headers["X-Title"] = "wiki-translation-harness"
         self._client_kwargs = dict(
             base_url=base_url,
             headers=headers,

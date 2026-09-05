@@ -1,6 +1,6 @@
 import pytest
 
-from wiki_translate_harness.claude_code_client import (
+from wiki_translation_harness.claude_code_client import (
     ClaudeCLIResult,
     ClaudeCodeClient,
     ClaudeCodeError,
@@ -17,7 +17,7 @@ def _no_real_sleep(monkeypatch):
     async def fast_sleep(_seconds):
         return None
 
-    monkeypatch.setattr("wiki_translate_harness.claude_code_client.asyncio.sleep", fast_sleep)
+    monkeypatch.setattr("wiki_translation_harness.claude_code_client.asyncio.sleep", fast_sleep)
 
 
 def _ok(text="përshëndetje", input_tokens=10, output_tokens=5) -> ClaudeCLIResult:
@@ -39,7 +39,7 @@ def _err(stderr="boom") -> ClaudeCLIResult:
 @pytest.mark.asyncio
 async def test_successful_call_returns_usage(monkeypatch):
     monkeypatch.setattr(
-        "wiki_translate_harness.claude_code_client.run_claude_cli",
+        "wiki_translation_harness.claude_code_client.run_claude_cli",
         lambda *a, **kw: _ok(),
     )
     client = ClaudeCodeClient(model="claude-sonnet-5")
@@ -64,7 +64,7 @@ async def test_missing_binary_fails_fast_without_retrying(monkeypatch):
         calls.append(1)
         return _err(stderr="claude CLI not found ('claude'): [Errno 2] No such file or directory")
 
-    monkeypatch.setattr("wiki_translate_harness.claude_code_client.run_claude_cli", fake)
+    monkeypatch.setattr("wiki_translation_harness.claude_code_client.run_claude_cli", fake)
     client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
     with pytest.raises(ClaudeCodeError):
         await client.chat_completion("claude-sonnet-5", _MESSAGES)
@@ -78,7 +78,7 @@ async def test_retries_then_succeeds(monkeypatch):
     def fake(*a, **kw):
         return results.pop(0)
 
-    monkeypatch.setattr("wiki_translate_harness.claude_code_client.run_claude_cli", fake)
+    monkeypatch.setattr("wiki_translation_harness.claude_code_client.run_claude_cli", fake)
     retries_seen = []
     client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
     text, pt, ct = await client.chat_completion(
@@ -91,7 +91,7 @@ async def test_retries_then_succeeds(monkeypatch):
 @pytest.mark.asyncio
 async def test_gives_up_after_max_retries(monkeypatch):
     monkeypatch.setattr(
-        "wiki_translate_harness.claude_code_client.run_claude_cli",
+        "wiki_translation_harness.claude_code_client.run_claude_cli",
         lambda *a, **kw: _err(stderr="persistent failure"),
     )
     client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=2)
@@ -109,7 +109,7 @@ def test_truncation_heuristic_flags_short_result_as_error():
     import subprocess
     from unittest.mock import patch
 
-    from wiki_translate_harness.claude_code_client import run_claude_cli
+    from wiki_translation_harness.claude_code_client import run_claude_cli
 
     events = [
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "short"}]}},
@@ -118,7 +118,7 @@ def test_truncation_heuristic_flags_short_result_as_error():
     stdout = "\n".join(json.dumps(e) for e in events)
 
     with patch(
-        "wiki_translate_harness.claude_code_client.subprocess.run",
+        "wiki_translation_harness.claude_code_client.subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
     ):
         result = run_claude_cli("system", "user", model="claude-sonnet-5")
@@ -136,7 +136,7 @@ def test_max_tokens_stop_reason_flagged_as_truncated():
     import subprocess
     from unittest.mock import patch
 
-    from wiki_translate_harness.claude_code_client import run_claude_cli
+    from wiki_translation_harness.claude_code_client import run_claude_cli
 
     long_text = "x" * 20000
     events = [
@@ -151,7 +151,7 @@ def test_max_tokens_stop_reason_flagged_as_truncated():
     stdout = "\n".join(json.dumps(e) for e in events)
 
     with patch(
-        "wiki_translate_harness.claude_code_client.subprocess.run",
+        "wiki_translation_harness.claude_code_client.subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
     ):
         result = run_claude_cli("system", "user", model="claude-sonnet-5")
@@ -172,7 +172,7 @@ def test_end_turn_with_moderate_ratio_not_flagged():
     import subprocess
     from unittest.mock import patch
 
-    from wiki_translate_harness.claude_code_client import run_claude_cli
+    from wiki_translation_harness.claude_code_client import run_claude_cli
 
     text = "x" * 4000  # 4000 chars / 3000 visible tokens = 1.33 -- between 1.0 and 2.0
     events = [
@@ -188,7 +188,7 @@ def test_end_turn_with_moderate_ratio_not_flagged():
     stdout = "\n".join(json.dumps(e) for e in events)
 
     with patch(
-        "wiki_translate_harness.claude_code_client.subprocess.run",
+        "wiki_translation_harness.claude_code_client.subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
     ):
         result = run_claude_cli("system", "user", model="claude-sonnet-5")
@@ -208,7 +208,7 @@ def test_thinking_tokens_excluded_from_truncation_check():
     import subprocess
     from unittest.mock import patch
 
-    from wiki_translate_harness.claude_code_client import run_claude_cli
+    from wiki_translation_harness.claude_code_client import run_claude_cli
 
     real_text = "x" * 3500  # ~3500 chars of "real" translated text
     events = [
@@ -227,7 +227,7 @@ def test_thinking_tokens_excluded_from_truncation_check():
     stdout = "\n".join(json.dumps(e) for e in events)
 
     with patch(
-        "wiki_translate_harness.claude_code_client.subprocess.run",
+        "wiki_translation_harness.claude_code_client.subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
     ):
         result = run_claude_cli("system", "user", model="claude-sonnet-5")
@@ -247,7 +247,7 @@ def test_cache_tokens_counted_as_input():
     import subprocess
     from unittest.mock import patch
 
-    from wiki_translate_harness.claude_code_client import run_claude_cli
+    from wiki_translation_harness.claude_code_client import run_claude_cli
 
     events = [
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "translated text"}]}},
@@ -266,7 +266,7 @@ def test_cache_tokens_counted_as_input():
     stdout = "\n".join(json.dumps(e) for e in events)
 
     with patch(
-        "wiki_translate_harness.claude_code_client.subprocess.run",
+        "wiki_translation_harness.claude_code_client.subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
     ):
         result = run_claude_cli("system", "user", model="claude-sonnet-5")
@@ -277,10 +277,10 @@ def test_cache_tokens_counted_as_input():
 def test_missing_cli_binary_reported_as_error():
     from unittest.mock import patch
 
-    from wiki_translate_harness.claude_code_client import run_claude_cli
+    from wiki_translation_harness.claude_code_client import run_claude_cli
 
     with patch(
-        "wiki_translate_harness.claude_code_client.subprocess.run",
+        "wiki_translation_harness.claude_code_client.subprocess.run",
         side_effect=FileNotFoundError("no such file"),
     ):
         result = run_claude_cli("system", "user", model="claude-sonnet-5", cli_path="nonexistent-claude")
@@ -299,7 +299,7 @@ def test_cli_error_falls_back_to_result_text_when_stderr_empty():
     import subprocess
     from unittest.mock import patch
 
-    from wiki_translate_harness.claude_code_client import run_claude_cli
+    from wiki_translation_harness.claude_code_client import run_claude_cli
 
     events = [
         {
@@ -313,7 +313,7 @@ def test_cli_error_falls_back_to_result_text_when_stderr_empty():
     stdout = "\n".join(json.dumps(e) for e in events)
 
     with patch(
-        "wiki_translate_harness.claude_code_client.subprocess.run",
+        "wiki_translation_harness.claude_code_client.subprocess.run",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
     ):
         result = run_claude_cli("system", "user", model="claude-sonnet-5")
@@ -339,7 +339,7 @@ async def test_rate_limit_429_fails_fast_without_retrying(monkeypatch):
             raw={"api_error_status": 429},
         )
 
-    monkeypatch.setattr("wiki_translate_harness.claude_code_client.run_claude_cli", fake)
+    monkeypatch.setattr("wiki_translation_harness.claude_code_client.run_claude_cli", fake)
     client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
     with pytest.raises(ClaudeCodeError, match="429"):
         await client.chat_completion("claude-sonnet-5", _MESSAGES)

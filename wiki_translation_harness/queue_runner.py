@@ -1,4 +1,4 @@
-"""Queue mode: drain articles from the shared wiki-translate-queue repo
+"""Queue mode: drain articles from the shared wiki-translation-queue repo
 (github.com/arianit/wiki-translate-queue) instead of a manually-supplied
 --title/--titles/--category. Delegates the actual translation to the same
 run_pipeline() the CLI's normal modes use; this module only owns picking
@@ -14,14 +14,14 @@ import importlib.util
 import logging
 from pathlib import Path
 
-from wiki_translate_harness.config import Config
-from wiki_translate_harness.progress import ProgressReporter
-from wiki_translate_harness.sources import ArticleInput, parse_source_ref
-from wiki_translate_harness.statistics import StatsTracker
+from wiki_translation_harness.config import Config
+from wiki_translation_harness.progress import ProgressReporter
+from wiki_translation_harness.sources import ArticleInput, parse_source_ref
+from wiki_translation_harness.statistics import StatsTracker
 
-logger = logging.getLogger("wiki_translate_harness.queue_runner")
+logger = logging.getLogger("wiki_translation_harness.queue_runner")
 
-DEFAULT_QUEUE_REPO_DIR = Path("~/code/wiki-translate-queue").expanduser()
+DEFAULT_QUEUE_REPO_DIR = Path("~/code/wiki-translation-queue").expanduser()
 
 
 def load_queue_lib(repo_dir: Path):
@@ -37,7 +37,7 @@ async def run_queue_mode(
     max_articles: int = 10,
     stale_hours: float = 3.0,
 ) -> StatsTracker:
-    from wiki_translate_harness.pipeline import run_pipeline  # local import: mirrors cli.py
+    from wiki_translation_harness.pipeline import run_pipeline  # local import: mirrors cli.py
 
     queue_lib = load_queue_lib(queue_repo_dir)
     queue_lib.sync_to_remote(queue_repo_dir)

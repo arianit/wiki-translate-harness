@@ -9,7 +9,7 @@ from pathlib import Path
 def setup_logging(log_dir: Path, console_level: int = logging.WARNING) -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    logger = logging.getLogger("wiki_translate_harness")
+    logger = logging.getLogger("wiki_translation_harness")
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
     logger.propagate = False

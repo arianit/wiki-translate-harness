@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import re
 
-from wiki_translate_harness.mediawiki import MediaWikiClient
-from wiki_translate_harness.models import ValidationIssue, ValidationResult
+from wiki_translation_harness.mediawiki import MediaWikiClient
+from wiki_translation_harness.models import ValidationIssue, ValidationResult
 
 _SNIPPET_MAX = 120
 
@@ -66,6 +66,14 @@ _COUNTRY_DATA_LEAK_RE = re.compile(r"Country[\s_-]data[\s_]\S+", re.IGNORECASE)
 # unresolvable needs_human_review, since no amount of repair-round
 # re-prompting can create a missing module on the live target wiki.
 _KNOWN_HARMLESS_MISSING_DEPENDENCY_MODULES = {"Moduli:WikidataIB/i18n"}
+
+# Phantom template dependency: reported by action=parse's `templates` list but
+# absent from the article wikitext, absent from every existing template's raw
+# source, and producing zero occurrences in the rendered HTML (confirmed on
+# Jupiter 2026-09-05). Some Lua/template path references it internally without
+# ever rendering it, so it can't be fixed by editing the article and never
+# breaks the visible page. Same treatment as the module entries above.
+_KNOWN_HARMLESS_MISSING_DEPENDENCY_TEMPLATES = {"Stampa:Sec link image"}
 
 
 def _strip_html(s: str) -> str:
@@ -182,7 +190,10 @@ def find_live_issues(parse_result: dict, source_text: str = "") -> list[Validati
     for template in parse_result.get("templates", []) or []:
         if template.get("exists") is False:
             title = template.get("title", "?")
-            if title in _KNOWN_HARMLESS_MISSING_DEPENDENCY_MODULES:
+            if (
+                title in _KNOWN_HARMLESS_MISSING_DEPENDENCY_MODULES
+                or title in _KNOWN_HARMLESS_MISSING_DEPENDENCY_TEMPLATES
+            ):
                 continue
             # search by the bare name (without namespace prefix) since
             # that's what appears in the wikitext, not "Stampa:X"/"Template:X"

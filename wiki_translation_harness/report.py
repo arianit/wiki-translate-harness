@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from wiki_translate_harness.models import ArticleSource, Chunk, ChunkStatus
-from wiki_translate_harness.output import sanitize_filename
-from wiki_translate_harness.verification import VerifiedFacts
+from wiki_translation_harness.models import ArticleSource, Chunk, ChunkStatus
+from wiki_translation_harness.output import sanitize_filename
+from wiki_translation_harness.verification import VerifiedFacts
 
 _CITATION_LANGUAGE_RE = re.compile(r"\|\s*language\s*=\s*([a-zA-Z, -]+)")
 

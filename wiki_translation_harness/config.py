@@ -8,8 +8,8 @@ from typing import Any
 
 import yaml
 
-from wiki_translate_harness import __version__
-from wiki_translate_harness.models import Config
+from wiki_translation_harness import __version__
+from wiki_translation_harness.models import Config
 
 _ENV_API_KEY = "OPENROUTER_API_KEY"
 _ENV_LOCAL_API_KEY = "LOCAL_API_KEY"

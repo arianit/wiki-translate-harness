@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from wiki_translate_harness.models import Chunk, ChunkStatus
+from wiki_translation_harness.models import Chunk, ChunkStatus
 
 _UNSAFE_RE = re.compile(r'[\\/:*?"<>|]')
 

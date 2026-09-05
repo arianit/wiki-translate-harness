@@ -11,19 +11,19 @@ from pathlib import Path
 
 import orjson
 
-from wiki_translate_harness.cache import TranslationCache
-from wiki_translate_harness.engines import build_llm_client
-from wiki_translate_harness.mediawiki import MediaWikiClient, wiki_api_url_for_lang
-from wiki_translate_harness.models import ChunkStatus, Config, EngineError
-from wiki_translate_harness.output import assemble_chunks, sanitize_filename, save_article
-from wiki_translate_harness.parser import build_chunks, split_into_sections
-from wiki_translate_harness.skill_loader import load_skill
-from wiki_translate_harness.sources import ArticleInput, load_article_source
-from wiki_translate_harness.statistics import StatsTracker
-from wiki_translate_harness.translator import translate_chunk
-from wiki_translate_harness.validator import format_errors, validate_wikitext
+from wiki_translation_harness.cache import TranslationCache
+from wiki_translation_harness.engines import build_llm_client
+from wiki_translation_harness.mediawiki import MediaWikiClient, wiki_api_url_for_lang
+from wiki_translation_harness.models import ChunkStatus, Config, EngineError
+from wiki_translation_harness.output import assemble_chunks, sanitize_filename, save_article
+from wiki_translation_harness.parser import build_chunks, split_into_sections
+from wiki_translation_harness.skill_loader import load_skill
+from wiki_translation_harness.sources import ArticleInput, load_article_source
+from wiki_translation_harness.statistics import StatsTracker
+from wiki_translation_harness.translator import translate_chunk
+from wiki_translation_harness.validator import format_errors, validate_wikitext
 
-logger = logging.getLogger("wiki_translate_harness.benchmark")
+logger = logging.getLogger("wiki_translation_harness.benchmark")
 
 
 async def run_benchmark(
@@ -136,7 +136,7 @@ async def run_benchmark(
         valid_translations = {m: t for m, t in translations.items() if t is not None}
         if len(valid_translations) >= 2:
             try:
-                from wiki_translate_harness.evaluation import evaluate_translations
+                from wiki_translation_harness.evaluation import evaluate_translations
                 eval_result, error = await evaluate_translations(
                     judge_model=judge_model,
                     source_english=source.wikitext,

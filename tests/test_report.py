@@ -1,14 +1,14 @@
 from pathlib import Path
 
-from wiki_translate_harness.models import ArticleSource, Chunk, ChunkStatus
-from wiki_translate_harness.report import (
+from wiki_translation_harness.models import ArticleSource, Chunk, ChunkStatus
+from wiki_translation_harness.report import (
     ArticleReportData,
     build_article_report,
     build_attribution_block,
     report_path_for,
     save_report,
 )
-from wiki_translate_harness.verification import VerifiedFacts
+from wiki_translation_harness.verification import VerifiedFacts
 
 
 def _source(**overrides) -> ArticleSource:

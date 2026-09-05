@@ -12,7 +12,7 @@ import asyncio
 
 import httpx
 
-from wiki_translate_harness.models import ArticleSource
+from wiki_translation_harness.models import ArticleSource
 
 # Hard, independent backstop for every individual MediaWiki API call —
 # httpx's own `timeout=` on the client has been confirmed, twice, to not

@@ -1,4 +1,4 @@
-from wiki_translate_harness.parser import build_chunks, estimate_tokens, split_into_sections
+from wiki_translation_harness.parser import build_chunks, estimate_tokens, split_into_sections
 
 
 def test_sections_roundtrip_lead_and_headings():
@@ -115,7 +115,7 @@ def test_oversized_table_trailing_remainder_merged_not_standalone():
 
 
 def test_split_oversized_section_no_standalone_near_empty_chunk():
-    from wiki_translate_harness.parser import _split_oversized_section
+    from wiki_translation_harness.parser import _split_oversized_section
 
     table = "{| class=\"wikitable\"\n" + "\n".join(f"| {i}" for i in range(300)) + "\n|}"
     text = f"{table}\n"
@@ -133,7 +133,7 @@ def test_oversized_section_heading_merged_into_following_table_not_standalone():
     # table unit. Sent a bare heading with nothing to translate, the model
     # fabricated a replacement instead of echoing it back. The heading must
     # be merged into the following oversized chunk instead.
-    from wiki_translate_harness.parser import _split_oversized_section
+    from wiki_translation_harness.parser import _split_oversized_section
 
     table_rows = "\n".join(f"| row {i} data here" for i in range(300))
     table = f"{{| class=\"wikitable\"\n{table_rows}\n|}}"

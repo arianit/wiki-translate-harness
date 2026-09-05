@@ -3,8 +3,8 @@ get per-chunk/per-article text lines into logs/run.log for non-interactive
 runs, independent of the Rich Live table (which is never entered here, same
 as queue_runner.py's usage -- confirms refresh() no-ops without a Live)."""
 
-from wiki_translate_harness.models import RunStats
-from wiki_translate_harness.progress import ProgressReporter
+from wiki_translation_harness.models import RunStats
+from wiki_translation_harness.progress import ProgressReporter
 
 
 def _reporter(on_event=None) -> ProgressReporter:

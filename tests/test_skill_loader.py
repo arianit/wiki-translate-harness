@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from wiki_translate_harness.skill_loader import (
+from wiki_translation_harness.skill_loader import (
     SkillGitError,
     build_repair_messages,
     build_translation_messages,

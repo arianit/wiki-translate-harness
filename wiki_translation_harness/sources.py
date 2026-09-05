@@ -14,8 +14,8 @@ import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
-from wiki_translate_harness.mediawiki import MediaWikiClient
-from wiki_translate_harness.models import ArticleSource
+from wiki_translation_harness.mediawiki import MediaWikiClient
+from wiki_translation_harness.models import ArticleSource
 
 _WIKI_URL_RE = re.compile(
     r"^(?:https?://)?([a-z0-9-]+)\.(?:m\.)?wikipedia\.org/wiki/([^?#]+)(?:[?#].*)?$",

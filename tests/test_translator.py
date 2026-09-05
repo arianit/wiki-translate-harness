@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from wiki_translate_harness.cache import TranslationCache
-from wiki_translate_harness.models import Chunk, ChunkStatus, Config, ModelPricing, RunStats
-from wiki_translate_harness.skill_loader import SkillContent
-from wiki_translate_harness.translator import translate_chunk
+from wiki_translation_harness.cache import TranslationCache
+from wiki_translation_harness.models import Chunk, ChunkStatus, Config, ModelPricing, RunStats
+from wiki_translation_harness.skill_loader import SkillContent
+from wiki_translation_harness.translator import translate_chunk
 
 
 class FakeOpenRouterClient:
@@ -130,7 +130,7 @@ async def test_repair_exhausted_marks_failed_and_does_not_cache(tmp_path: Path):
     assert stats.validation_failures == 1
 
     # a failed translation must not be cached, so a rerun retries it
-    from wiki_translate_harness.cache import compute_key
+    from wiki_translation_harness.cache import compute_key
 
     key = compute_key("test-model", "en", "sq", _chunk().text, _skill().content_hash)
     assert cache.get(key) is None

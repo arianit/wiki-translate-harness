@@ -7,7 +7,7 @@ from pathlib import Path
 
 import orjson
 
-from wiki_translate_harness.models import RunStats
+from wiki_translation_harness.models import RunStats
 
 
 class StatsTracker:

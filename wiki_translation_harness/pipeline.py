@@ -14,18 +14,18 @@ import time
 
 import httpx
 
-from wiki_translate_harness.cache import TranslationCache, VerificationCache, compute_key
-from wiki_translate_harness.engines import LLMEngineClient, build_llm_client
-from wiki_translate_harness.citation_language import (
+from wiki_translation_harness.cache import TranslationCache, VerificationCache, compute_key
+from wiki_translation_harness.engines import LLMEngineClient, build_llm_client
+from wiki_translation_harness.citation_language import (
     dedupe_short_footnotes,
     fill_missing_citation_languages,
     fix_citation_param_names,
     fix_sfn_param_names,
 )
-from wiki_translate_harness.report import build_attribution_block
-from wiki_translate_harness.live_validator import validate_wikitext_live
-from wiki_translate_harness.mediawiki import MediaWikiClient, MediaWikiClientPool
-from wiki_translate_harness.models import (
+from wiki_translation_harness.report import build_attribution_block
+from wiki_translation_harness.live_validator import validate_wikitext_live
+from wiki_translation_harness.mediawiki import MediaWikiClient, MediaWikiClientPool
+from wiki_translation_harness.models import (
     ArticleSource,
     Chunk,
     ChunkStatus,
@@ -36,8 +36,8 @@ from wiki_translate_harness.models import (
     ValidationIssue,
     ValidationResult,
 )
-from wiki_translate_harness.openrouter import RetryCallback
-from wiki_translate_harness.output import (
+from wiki_translation_harness.openrouter import RetryCallback
+from wiki_translation_harness.output import (
     article_already_done,
     assemble_chunks,
     assemble_chunks_with_spans,
@@ -45,19 +45,19 @@ from wiki_translate_harness.output import (
     save_article,
     save_partial_article,
 )
-from wiki_translate_harness.parser import build_chunks, split_into_sections
-from wiki_translate_harness.progress import ProgressReporter
-from wiki_translate_harness.report import ArticleReportData, build_article_report, save_report
-from wiki_translate_harness.repair import repair_chunk
-from wiki_translate_harness.review_queue import record_needs_human_review
-from wiki_translate_harness.skill_loader import SkillContent, load_skill
-from wiki_translate_harness.sources import ArticleInput, load_article_source
-from wiki_translate_harness.statistics import StatsTracker
-from wiki_translate_harness.translator import translate_chunk
-from wiki_translate_harness.validator import format_errors, validate_wikitext
-from wiki_translate_harness.verification import VerifiedFacts, build_verified_facts_block, verify_wikitext
+from wiki_translation_harness.parser import build_chunks, split_into_sections
+from wiki_translation_harness.progress import ProgressReporter
+from wiki_translation_harness.report import ArticleReportData, build_article_report, save_report
+from wiki_translation_harness.repair import repair_chunk
+from wiki_translation_harness.review_queue import record_needs_human_review
+from wiki_translation_harness.skill_loader import SkillContent, load_skill
+from wiki_translation_harness.sources import ArticleInput, load_article_source
+from wiki_translation_harness.statistics import StatsTracker
+from wiki_translation_harness.translator import translate_chunk
+from wiki_translation_harness.validator import format_errors, validate_wikitext
+from wiki_translation_harness.verification import VerifiedFacts, build_verified_facts_block, verify_wikitext
 
-logger = logging.getLogger("wiki_translate_harness.pipeline")
+logger = logging.getLogger("wiki_translation_harness.pipeline")
 
 
 class ArticleLimitExceeded(Exception):

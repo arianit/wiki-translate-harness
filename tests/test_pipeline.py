@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from wiki_translate_harness.cache import TranslationCache, compute_key
-from wiki_translate_harness.models import Chunk, Config, RunStats
-from wiki_translate_harness.pipeline import run_assembly_repair
-from wiki_translate_harness.skill_loader import SkillContent
+from wiki_translation_harness.cache import TranslationCache, compute_key
+from wiki_translation_harness.models import Chunk, Config, RunStats
+from wiki_translation_harness.pipeline import run_assembly_repair
+from wiki_translation_harness.skill_loader import SkillContent
 
 
 class FakeOpenRouterClient:

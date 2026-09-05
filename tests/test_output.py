@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from wiki_translate_harness.models import Chunk, ChunkStatus
-from wiki_translate_harness.output import (
+from wiki_translation_harness.models import Chunk, ChunkStatus
+from wiki_translation_harness.output import (
     article_already_done,
     assemble_chunks,
     assemble_chunks_partial,

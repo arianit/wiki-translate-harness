@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from wiki_translate_harness.citation_language import (
+from wiki_translation_harness.citation_language import (
     dedupe_short_footnotes,
     detect_source_language,
     fill_missing_citation_languages,

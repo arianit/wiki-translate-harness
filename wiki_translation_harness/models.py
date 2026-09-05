@@ -239,12 +239,12 @@ class Config(BaseModel):
     # inside a git working copy of the skill's repo. None reads plain files.
     skill_git_ref: str | None = None
 
-    # Defaults into the shared wiki-translate-queue repo's output/ folder
+    # Defaults into the shared wiki-translation-queue repo's output/ folder
     # (github.com/arianit/wiki-translate-queue) so articles produced by this
     # harness land in the same place as wikitranslateautorun's/mmtp's/
     # wikipedia-articles-translation's -- override in config.yaml for a
     # purely local run.
-    output_dir: Path = Path("~/code/wiki-translate-queue/output")
+    output_dir: Path = Path("~/code/wiki-translation-queue/output")
     cache_db_path: Path = Path("cache") / "translation_memory.sqlite3"
     log_dir: Path = Path("logs")
     stats_path: Path = Path("stats.json")
@@ -347,7 +347,7 @@ class Config(BaseModel):
     # operator can be reached — unidentified bulk traffic risks throttling/blocking.
     # wikimedia_contact has no default on purpose; config.py refuses to build a Config
     # without it (or an explicit user_agent override) rather than send anonymous traffic.
-    wikimedia_tool_name: str = "wiki-translate-harness"
+    wikimedia_tool_name: str = "wiki-translation-harness"
     wikimedia_contact: str | None = None
     user_agent: str | None = None
 

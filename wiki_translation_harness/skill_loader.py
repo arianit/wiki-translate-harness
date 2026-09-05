@@ -10,7 +10,7 @@ local uncommitted edits to the skill's own repo can't silently change
 translation behavior underneath the harness.
 
 The skill (github.com/arianit/enwiki-sqwiki-translation) is split across
-three directories — enwiki-sqwiki-translation (translate), wikiterms
+three directories — enwiki-sqwiki-translation (translation), wikiterms
 (terminology/link verification), wikiqa (pre-delivery checklist) — that
 were written to be followed by an interactive agent with shell/tool access
 (curl, grep, Write) and to invoke each other via a Skill tool: it fetches
@@ -151,7 +151,7 @@ def _git_root_and_prefix(skill_path: Path) -> tuple[Path, str]:
 
 def _normalize_skill_paths(skill_path: Path | str | Sequence[Path | str]) -> list[Path]:
     """A single directory is the common case; a list lets skill_path span
-    multiple skill directories (e.g. translate + wikiterms + wikiqa) that
+    multiple skill directories (e.g. translation + wikiterms + wikiqa) that
     get concatenated into one system prompt, since this harness has no
     Skill-tool equivalent to invoke them on demand at runtime."""
     if isinstance(skill_path, (str, Path)):

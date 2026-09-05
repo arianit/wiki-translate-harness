@@ -4,9 +4,9 @@ import httpx
 import pytest
 import respx
 
-from wiki_translate_harness.cache import VerificationCache
-from wiki_translate_harness.mediawiki import MediaWikiClient
-from wiki_translate_harness.verification import (
+from wiki_translation_harness.cache import VerificationCache
+from wiki_translation_harness.mediawiki import MediaWikiClient
+from wiki_translation_harness.verification import (
     VerifiedFacts,
     WikidataVerifier,
     build_verified_facts_block,

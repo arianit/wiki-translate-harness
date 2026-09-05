@@ -14,8 +14,8 @@ import httpx
 import pytest
 import respx
 
-from wiki_translate_harness.live_validator import find_live_issues, validate_wikitext_live
-from wiki_translate_harness.mediawiki import MediaWikiClient
+from wiki_translation_harness.live_validator import find_live_issues, validate_wikitext_live
+from wiki_translation_harness.mediawiki import MediaWikiClient
 
 API_URL = "https://sq.wikipedia.org/w/api.php"
 
@@ -228,7 +228,7 @@ async def test_parse_wikitext_and_validate_wikitext_live_end_to_end():
 
 @pytest.mark.asyncio
 async def test_parse_wikitext_raises_on_api_error():
-    from wiki_translate_harness.mediawiki import MediaWikiError
+    from wiki_translation_harness.mediawiki import MediaWikiError
 
     client = MediaWikiClient(API_URL, "test-agent/1.0")
     try:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from wiki_translate_harness.validator import format_errors, validate_wikitext
+from wiki_translation_harness.validator import format_errors, validate_wikitext
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 

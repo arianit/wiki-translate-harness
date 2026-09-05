@@ -1,7 +1,7 @@
-from wiki_translate_harness.claude_code_client import ClaudeCodeClient
-from wiki_translate_harness.engines import build_llm_client
-from wiki_translate_harness.models import Config
-from wiki_translate_harness.openrouter import OpenRouterClient
+from wiki_translation_harness.claude_code_client import ClaudeCodeClient
+from wiki_translation_harness.engines import build_llm_client
+from wiki_translation_harness.models import Config
+from wiki_translation_harness.openrouter import OpenRouterClient
 
 
 def _config(**overrides) -> Config:

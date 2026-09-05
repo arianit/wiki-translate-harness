@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from wiki_translate_harness.sources import ArticleInput, parse_source_ref, resolve_static_inputs
+from wiki_translation_harness.sources import ArticleInput, parse_source_ref, resolve_static_inputs
 
 
 def test_parse_lang_prefix():

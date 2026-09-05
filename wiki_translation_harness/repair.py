@@ -8,10 +8,10 @@ correcting the specific validation errors passed in.
 
 from __future__ import annotations
 
-from wiki_translate_harness.engines import LLMEngineClient
-from wiki_translate_harness.models import ModelPricing, TranslationResult
-from wiki_translate_harness.openrouter import RetryCallback, run_completion
-from wiki_translate_harness.skill_loader import SkillContent, build_repair_messages
+from wiki_translation_harness.engines import LLMEngineClient
+from wiki_translation_harness.models import ModelPricing, TranslationResult
+from wiki_translation_harness.openrouter import RetryCallback, run_completion
+from wiki_translation_harness.skill_loader import SkillContent, build_repair_messages
 
 
 async def repair_chunk(

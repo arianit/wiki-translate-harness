@@ -1,4 +1,4 @@
-# wiki-translate-harness
+# wiki-translation-harness
 
 Batch harness that translates Wikipedia articles into a target-language wiki
 source (built and tested for English → Albanian sq.wikipedia), via the
@@ -38,7 +38,7 @@ access (curl, grep, Write). A single OpenRouter chat-completion call has none
 of that. So the harness loads the skill's `SKILL.md` from disk verbatim and
 uses it as the system prompt for each per-section OpenRouter call, prefixed
 with a small fixed "invocation frame" (see
-`wiki_translate_harness/skill_loader.py`) that tells the model it has no
+`wiki_translation_harness/skill_loader.py`) that tells the model it has no
 tools/internet in this call and should skip steps that require live
 lookups. That frame carries zero translation guidance of its own — every
 grammar/vocabulary/convention rule still comes from the skill file.
@@ -74,11 +74,11 @@ explicit `user_agent` override).
 ## Usage
 
 ```bash
-wiki-translate-harness --title "Paris"   # provider: claude_code, model: claude-sonnet-5 by default
-wiki-translate-harness --titles articles.txt --provider openrouter --model qwen/qwen3-235b-a22b
-wiki-translate-harness --category "Physics" --provider openrouter --model mistralai/mistral-large
-wiki-translate-harness --file article.wiki
-wiki-translate-harness --directory raw_articles/
+wiki-translation-harness --title "Paris"   # provider: claude_code, model: claude-sonnet-5 by default
+wiki-translation-harness --titles articles.txt --provider openrouter --model qwen/qwen3-235b-a22b
+wiki-translation-harness --category "Physics" --provider openrouter --model mistralai/mistral-large
+wiki-translation-harness --file article.wiki
+wiki-translation-harness --directory raw_articles/
 ```
 
 **Source language is generic, not hardcoded to English.** Target language is
@@ -88,8 +88,8 @@ each title can carry its own source wiki — a `lang:Title` prefix
 each line of a `--titles` file:
 
 ```bash
-wiki-translate-harness --title "sq:Gjergj Arianiti"
-wiki-translate-harness --title "https://sr.wikipedia.org/wiki/Ниш"
+wiki-translation-harness --title "sq:Gjergj Arianiti"
+wiki-translation-harness --title "https://sr.wikipedia.org/wiki/Ниш"
 ```
 
 With no prefix, `source_lang` from config.yaml is used. `--category` also
@@ -114,7 +114,7 @@ Three `--provider` values, selectable per run with no code change:
   reports as `$0.00` (the CLI's own JSON output does carry a real
   `total_cost_usd` per call, but that isn't wired into the harness's
   external per-token pricing-table cost model yet — see
-  `wiki_translate_harness/claude_code_client.py`).
+  `wiki_translation_harness/claude_code_client.py`).
 - **`openrouter`** — the original engine, unchanged. Requires
   `openrouter_api_key` (or the `OPENROUTER_API_KEY` env var).
 - **`local`** — any local OpenAI-compatible server (llama.cpp server,
@@ -128,7 +128,7 @@ default model rather than silently carrying over the other provider's
 model id.
 
 Adding a fourth engine later means adding one branch to
-`wiki_translate_harness/engines.py`'s `build_llm_client()` and a new client
+`wiki_translation_harness/engines.py`'s `build_llm_client()` and a new client
 module implementing `chat_completion()`/`get_pricing_for()`/
 `fetch_pricing()`/`aclose()` (see `engines.LLMEngineClient`) — nothing in
 `translator.py`, `repair.py`, `pipeline.py`, or `benchmark.py` needs to
@@ -162,7 +162,7 @@ Pi's `~/.pi/agent/models.json`:
 Run against it with:
 
 ```bash
-wiki-translate-harness --title "Paris" --provider local \
+wiki-translation-harness --title "Paris" --provider local \
   --base-url http://127.0.0.1:8080/v1 --model qwen3-8b-q5-k-m
 ```
 
@@ -175,7 +175,7 @@ local_base_url: http://127.0.0.1:8080/v1
 local_model: qwen3-8b-q5-k-m
 ```
 
-then just run `wiki-translate-harness --title "Paris"` — switch to another
+then just run `wiki-translation-harness --title "Paris"` — switch to another
 engine with `--provider claude_code` or `--provider openrouter` whenever you
 want. `local_api_key` can be left unset
 (most local servers, including llama.cpp server, ignore it).
@@ -185,7 +185,7 @@ want. `local_api_key` can be left unset
 The skill's own methodology assumes live tool access (batch Wikidata
 sitelink checks, curl-based template/parameter checks) that a single
 completion call doesn't have. The harness does this work itself
-(`wiki_translate_harness/verification.py`) during the planning phase, and
+(`wiki_translation_harness/verification.py`) during the planning phase, and
 hands the model **verified facts** as plain data alongside each section —
 never translation guidance, only what already exists:
 
@@ -262,7 +262,7 @@ and date already captured during fetch.
 Compare several models on the same article:
 
 ```bash
-wiki-translate-harness benchmark --title "Paris" \
+wiki-translation-harness benchmark --title "Paris" \
   --model deepseek/deepseek-chat-v3-0324 \
   --model qwen/qwen3-235b-a22b \
   --model mistralai/mistral-large \
@@ -278,7 +278,7 @@ estimated cost per model.
 You can optionally have a separate judge model (not among the evaluated ones) rank the translations and provide detailed quality scores:
 
 ```bash
-wiki-translate-harness benchmark --title "Paris" \
+wiki-translation-harness benchmark --title "Paris" \
   --model deepseek/deepseek-v3.2 \
   --model qwen/qwen3-235b-a22b \
   --model mistralai/mistral-large \

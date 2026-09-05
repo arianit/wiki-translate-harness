@@ -16,8 +16,8 @@ from pathlib import Path
 
 import orjson
 
-from wiki_translate_harness.models import ValidationIssue
-from wiki_translate_harness.output import sanitize_filename
+from wiki_translation_harness.models import ValidationIssue
+from wiki_translation_harness.output import sanitize_filename
 
 _INDEX_FILENAME = "needs_human_review.json"
 

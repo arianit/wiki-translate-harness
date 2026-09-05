@@ -1,5 +1,5 @@
 [project]
-name = "wiki-translate-harness"
+name = "wiki-translation-harness"
 version = "0.1.0"
 description = "Batch harness that translates English Wikipedia articles into Albanian sq.wikipedia source, delegating all translation judgment to the enwiki-sqwiki-translation Pi skill."
 requires-python = ">=3.11"
@@ -24,14 +24,14 @@ dev = [
 ]
 
 [project.scripts]
-wiki-translate-harness = "wiki_translate_harness.cli:app"
+wiki-translation-harness = "wiki_translation_harness.cli:app"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["wiki_translate_harness*"]
+include = ["wiki_translation_harness*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

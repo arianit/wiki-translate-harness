@@ -20,9 +20,9 @@ from dataclasses import dataclass, field
 import httpx
 import mwparserfromhell as mwp
 
-from wiki_translate_harness.cache import VerificationCache
-from wiki_translate_harness.citation_language import CITATION_TEMPLATE_NAMES
-from wiki_translate_harness.mediawiki import MediaWikiClient, MediaWikiError
+from wiki_translation_harness.cache import VerificationCache
+from wiki_translation_harness.citation_language import CITATION_TEMPLATE_NAMES
+from wiki_translation_harness.mediawiki import MediaWikiClient, MediaWikiError
 
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 _INFOBOX_NAME_RE = re.compile(r"^infobox\b", re.IGNORECASE)

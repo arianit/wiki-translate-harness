@@ -1,4 +1,4 @@
-"""wiki-translate-harness CLI entrypoint. Wires config, sources, and pipeline together."""
+"""wiki-translation-harness CLI entrypoint. Wires config, sources, and pipeline together."""
 
 from __future__ import annotations
 
@@ -9,16 +9,16 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from wiki_translate_harness.output import sanitize_filename
-from wiki_translate_harness.evaluation import save_evaluation_results
-from wiki_translate_harness.config import build_config
-from wiki_translate_harness.logging_setup import setup_logging
-from wiki_translate_harness.mediawiki import MediaWikiClient, wiki_api_url_for_lang
-from wiki_translate_harness.progress import ProgressReporter
-from wiki_translate_harness.sources import ArticleInput, parse_source_ref, resolve_static_inputs
-from wiki_translate_harness.statistics import StatsTracker
-from wiki_translate_harness.benchmark import run_benchmark
-from wiki_translate_harness.queue_runner import DEFAULT_QUEUE_REPO_DIR
+from wiki_translation_harness.output import sanitize_filename
+from wiki_translation_harness.evaluation import save_evaluation_results
+from wiki_translation_harness.config import build_config
+from wiki_translation_harness.logging_setup import setup_logging
+from wiki_translation_harness.mediawiki import MediaWikiClient, wiki_api_url_for_lang
+from wiki_translation_harness.progress import ProgressReporter
+from wiki_translation_harness.sources import ArticleInput, parse_source_ref, resolve_static_inputs
+from wiki_translation_harness.statistics import StatsTracker
+from wiki_translation_harness.benchmark import run_benchmark
+from wiki_translation_harness.queue_runner import DEFAULT_QUEUE_REPO_DIR
 
 app = typer.Typer(
     add_completion=False,
@@ -127,7 +127,7 @@ def main(
     logger = setup_logging(cfg.log_dir)
 
     async def _run() -> StatsTracker:
-        from wiki_translate_harness.pipeline import run_pipeline  # local import: avoids import cost on --help
+        from wiki_translation_harness.pipeline import run_pipeline  # local import: avoids import cost on --help
 
         inputs: list[ArticleInput] = resolve_static_inputs(title, titles, file, directory)
 
@@ -283,7 +283,7 @@ def queue(
     instead of a manually-supplied --title/--titles/--category, so this
     harness can run unattended (e.g. from cron) against the same queue
     wikitranslateautorun's batch_controller.py uses."""
-    from wiki_translate_harness.queue_runner import run_queue_mode  # local import: mirrors main()
+    from wiki_translation_harness.queue_runner import run_queue_mode  # local import: mirrors main()
 
     overrides = _build_overrides(
         model, workers, temperature, max_retries, cache, validate, repair, live_validate, provider, base_url

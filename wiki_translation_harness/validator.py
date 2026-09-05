@@ -16,7 +16,7 @@ import zlib
 
 import mwparserfromhell as mwp
 
-from wiki_translate_harness.models import ValidationIssue, ValidationResult
+from wiki_translation_harness.models import ValidationIssue, ValidationResult
 
 _REF_OPEN_RE = re.compile(r"<ref\b[^>]*>", re.IGNORECASE)
 _REF_CLOSE_RE = re.compile(r"</ref\s*>", re.IGNORECASE)

@@ -2,8 +2,8 @@ import httpx
 import pytest
 import respx
 
-from wiki_translate_harness.models import ModelPricing
-from wiki_translate_harness.openrouter import OpenRouterClient, OpenRouterError, compute_cost
+from wiki_translation_harness.models import ModelPricing
+from wiki_translation_harness.openrouter import OpenRouterClient, OpenRouterError, compute_cost
 
 BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -13,7 +13,7 @@ def _no_real_sleep(monkeypatch):
     async def fast_sleep(_seconds):
         return None
 
-    monkeypatch.setattr("wiki_translate_harness.openrouter.asyncio.sleep", fast_sleep)
+    monkeypatch.setattr("wiki_translation_harness.openrouter.asyncio.sleep", fast_sleep)
 
 
 def _success_response():

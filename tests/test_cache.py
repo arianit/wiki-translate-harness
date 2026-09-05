@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from wiki_translate_harness.cache import TranslationCache, compute_key
+from wiki_translation_harness.cache import TranslationCache, compute_key
 
 
 def test_key_differs_by_model():

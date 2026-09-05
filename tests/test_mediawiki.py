@@ -4,7 +4,7 @@ import httpx
 import pytest
 import respx
 
-from wiki_translate_harness.mediawiki import (
+from wiki_translation_harness.mediawiki import (
     MediaWikiClient,
     MediaWikiClientPool,
     MediaWikiError,

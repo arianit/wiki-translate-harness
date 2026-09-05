@@ -2,8 +2,8 @@ from pathlib import Path
 
 import orjson
 
-from wiki_translate_harness.models import ValidationIssue
-from wiki_translate_harness.review_queue import record_needs_human_review, review_path_for
+from wiki_translation_harness.models import ValidationIssue
+from wiki_translation_harness.review_queue import record_needs_human_review, review_path_for
 
 
 def _issue(**kw) -> ValidationIssue:
