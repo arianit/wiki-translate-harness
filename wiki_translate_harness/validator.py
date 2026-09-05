@@ -22,6 +22,26 @@ _REF_OPEN_RE = re.compile(r"<ref\b[^>]*>", re.IGNORECASE)
 _REF_CLOSE_RE = re.compile(r"</ref\s*>", re.IGNORECASE)
 _HEADING_LIKE_RE = re.compile(r"(={2,6})([^\n=]+)\1[ \t]*(?=\n|$)")
 
+# Content inside these tags is verbatim/escaped wikitext (LaTeX math, chemical
+# formulas, code samples) and legitimately contains brace substrings that are
+# not template delimiters — e.g. ``<math>\tfrac{M_\text{Neptune}}{M_\text{Earth}}
+# </math>`` ends in ``}}`` from two single closing braces, not one template
+# close. Stripping these spans before the raw ``{{``/``}}``, ``[[``/``]]`` and
+# ``<!--``/``-->`` counts prevents a false-positive ``Unbalanced template`` on
+# any chunk containing math (confirmed on Neptune's "Physical characteristics"
+# and "Moons" sections, which are brace-balanced in the source but produce
+# 7 ``{{`` vs 19 ``}}`` because of ``\tfrac`` LaTeX). Not used for the table
+# check, which already masks templates via mwparserfromhell and whose ``{|``/``|}``
+# delimiters don't occur inside math/code.
+_VERBATIM_TAG_RE = re.compile(
+    r"<(math|chem|nowiki|code|pre|syntaxhighlight|source|tt)\b[^>]*>.*?</\1\s*>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _strip_verbatim_spans(text: str) -> str:
+    return _VERBATIM_TAG_RE.sub("", text)
+
 _SNIPPET_MAX = 120
 
 
@@ -70,6 +90,32 @@ def _check_pair(text: str, open_tok: str, close_tok: str, kind: str, issues: lis
                 message=f"Unbalanced {kind}: {o} occurrences of '{open_tok}' vs {c} of '{close_tok}'",
             )
         )
+
+
+def _check_table_pair(text: str, issues: list[ValidationIssue]) -> None:
+    """Count wikitext table delimiters ``{|`` / ``|}`` while ignoring the
+    ``|}`` substring that a template close produces when its last parameter
+    is empty (``|}}``), e.g. ``{{val|12.6|u=km/s|}}``.
+
+    mwparserfromhell parses tables leniently — an unmatched ``{|`` silently
+    becomes plain text rather than a Tag node, so counting table tags alone
+    can't detect a dropped ``|}`` close. But it parses templates reliably, so
+    we strip template spans first: a real ``|}`` table close is never inside
+    a ``{{...}}`` span in source wikitext, while every false-positive
+    ``|}}`` is. Templates nested inside a table cell are removed too (the
+    recursive filter walks into Tag nodes), and a nested template whose
+    parent was already removed is simply skipped."""
+    try:
+        code = mwp.parse(text)
+        for tpl in code.filter_templates():
+            try:
+                code.remove(tpl)
+            except ValueError:
+                pass  # already removed together with its parent template
+        masked = str(code)
+    except Exception:
+        masked = text  # parse failed outright; a parse_error issue is added elsewhere
+    _check_pair(masked, "{|", "|}", "table", issues)
 
 
 def _check_refs(text: str, issues: list[ValidationIssue]) -> None:
@@ -317,10 +363,13 @@ def validate_wikitext(text: str) -> ValidationResult:
 
     _check_leaked_meta_commentary(text, issues)
     _check_degenerate_repetition(text, issues)
-    _check_pair(text, "{{", "}}", "template", issues)
-    _check_pair(text, "[[", "]]", "link", issues)
-    _check_pair(text, "{|", "|}", "table", issues)
-    _check_pair(text, "<!--", "-->", "comment", issues)
+    # Brace/bracket counts must ignore verbatim content (math, code, nowiki)
+    # where stray ``}}``/``]]`` substrings are legitimate, not delimiters.
+    masked = _strip_verbatim_spans(text)
+    _check_pair(masked, "{{", "}}", "template", issues)
+    _check_pair(masked, "[[", "]]", "link", issues)
+    _check_table_pair(text, issues)
+    _check_pair(masked, "<!--", "-->", "comment", issues)
     _check_refs(text, issues)
     _check_headings_at_line_start(text, issues)
     _check_template_based_issues(text, issues)

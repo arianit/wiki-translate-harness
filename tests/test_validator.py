@@ -34,6 +34,41 @@ def test_unbalanced_table_detected():
     assert any(i.kind == "table" for i in result.issues)
 
 
+def test_template_trailing_pipe_not_flagged_as_table():
+    # Regression: a template whose last parameter is empty closes with ``|}}``,
+    # whose ``|}`` substring was wrongly counted as a table close, making any
+    # chunk containing e.g. {{val|12.6|u=km/s|}} permanently fail validation
+    # (Jupiter infobox). {{val|...|}} mid-line and {{Infobox\n|p\n|}} on its
+    # own line must both stay balanced.
+    text = (
+        "{{Short description|planet}}\n"
+        "{{Infobox planet\n"
+        "| rot_velocity = {{val|12.6|u=km/s|}}\n"
+        "| axial_tilt = 3.13°\n"
+        "|}}\n"
+        "'''Jupiter''' is the fifth planet.\n"
+    )
+    result = validate_wikitext(text)
+    assert result.valid, [i.message for i in result.issues]
+
+
+def test_real_table_balanced_alongside_trailing_pipe_template():
+    text = (
+        "{| class=wikitable\n"
+        "| cell with {{val|1|u=km/s|}} inside\n"
+        "|}\n"
+    )
+    result = validate_wikitext(text)
+    assert result.valid, [i.message for i in result.issues]
+
+
+def test_dropped_table_close_still_detected_with_templates_present():
+    text = "{| class=wikitable\n| cell {{val|1|u=km/s|}}\n| a\n"
+    result = validate_wikitext(text)
+    assert not result.valid
+    assert any(i.kind == "table" for i in result.issues)
+
+
 def test_unbalanced_ref_detected():
     result = validate_wikitext("text <ref>unterminated")
     assert not result.valid
@@ -56,6 +91,38 @@ def test_format_errors_readable():
     errs = format_errors(result)
     assert len(errs) >= 1
     assert "link" in errs[0]
+
+
+def test_math_verbatim_not_counted_as_template_braces():
+    # Regression: <math>\tfrac{...}{...}}</math> ends in "}}" from two single
+    # closing braces, not a template close. The raw {{/}} count flagged
+    # Neptune's "Physical characteristics" and "Moons" chunks (7 {{ vs 19 }}
+    # in the source) as unbalanced templates, failing the whole article
+    # even though the model translated correctly. Verbatim tags (math, code,
+    # nowiki, …) must be stripped before the brace/bracket pair counts.
+    text = (
+        "'''Neptune''' has a mass of 1.024{{e|26}}&nbsp;kg.\n"
+        ":<math>\\tfrac{M_\\text{Neptune}}{M_\\text{Earth}} = 17.15.</math>\n"
+        "Values from {{cite web |title=Fact Sheet }}.\n"
+    )
+    result = validate_wikitext(text)
+    assert result.valid, [i.message for i in result.issues]
+
+
+def test_code_verbatim_not_counted_as_link_brackets():
+    # A <code> or <nowiki> span containing "]]" must not be counted as a
+    # link close.
+    text = "See <code>array[[0]]</code> and {{cite web|title=x}}.\n"
+    result = validate_wikitext(text)
+    assert result.valid, [i.message for i in result.issues]
+
+
+def test_unbalanced_template_outside_verbatim_still_detected():
+    # The masking must not suppress a genuine imbalance in real wikitext.
+    text = "<math>x = 1</math> then {{cite web|title=x\n"
+    result = validate_wikitext(text)
+    assert not result.valid
+    assert any(i.kind == "template" for i in result.issues)
 
 
 def test_heading_merged_onto_prior_line_detected():
