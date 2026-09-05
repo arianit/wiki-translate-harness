@@ -245,6 +245,17 @@ def test_fixture_table_span_ok_rowspan_not_flagged():
     assert result.valid
 
 
+def test_fixture_table_span_trailing_block_not_flagged():
+    # A deliberately narrower trailing sub-block (a summary/notes row pair
+    # that doesn't fill every column) spanning two consecutive rows — a real
+    # Wikipedia authoring pattern, confirmed via Ashoka's "Edicts of Ashoka"
+    # table, which triggers this exact shape on the pristine English source
+    # itself (i.e. it's not something translation could have introduced or
+    # could ever "fix"). Must not be flagged.
+    result = validate_wikitext(_load_fixture("table_span_trailing_block_not_flagged.wiki"))
+    assert result.valid
+
+
 def test_fixture_clean_valid_has_no_issues():
     # Ordinary sqwiki prose using convert/Sfn/a table correctly — the four
     # new checks must not false-positive on legitimate usage.

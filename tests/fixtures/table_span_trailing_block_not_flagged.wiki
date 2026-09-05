@@ -1,0 +1,15 @@
+{| class="wikitable"
+! colspan=4 | Titulli
+|-
+! Viti !! Emri !! Vendi !! Faqja
+|-
+| 1990 || Alfa || Tirana || fq. 1
+|-
+| 1995 || Beta || Durrës || fq. 2
+|-
+| rowspan=2 | Vitet e fundit || colspan=2 | Shënime përmbledhëse
+|-
+| colspan=2 | Vazhdim i shënimeve
+|-
+! colspan=4 | Fundi
+|}

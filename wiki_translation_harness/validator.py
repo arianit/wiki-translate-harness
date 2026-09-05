@@ -332,23 +332,39 @@ def _check_table_span_mismatches(text: str, issues: list[ValidationIssue]) -> No
             continue
         expected_width = max(width_counts.items(), key=lambda kv: kv[1])[0]
 
-        for (row_offset, _), width in zip(rows, widths):
-            if width != expected_width:
-                abs_offset = table_match.start() + row_offset
-                line_end = block.find("\n", row_offset)
-                row_text = block[row_offset : line_end if line_end != -1 else None]
-                issues.append(
-                    ValidationIssue(
-                        kind="table_span_mismatch",
-                        message=(
-                            f"Table row has effective width {width} (columns, honoring "
-                            f"rowspan/colspan), expected {expected_width} to match the rest of the table"
-                        ),
-                        severity="warning",
-                        line_number=_line_number(text, abs_offset),
-                        snippet=_snippet(row_text),
-                    )
+        # Only flag *isolated* off-width rows (mismatch surrounded on both
+        # sides by rows that do match the table's dominant width) — real
+        # translation defects (a dropped colspan/rowspan) show up as a single
+        # row breaking an otherwise-uniform table. A contiguous run of two or
+        # more off-width rows is far more often a deliberately asymmetric
+        # trailing sub-block (e.g. a summary/notes row group with fewer
+        # populated columns than the rest of the table) that MediaWiki
+        # renders fine as-is — confirmed via a real sq.wikipedia infobox-style
+        # table (Ashoka's Edicts table) that triggers this exact shape on the
+        # pristine, untranslated English source, i.e. before any translation
+        # touched it at all.
+        for idx, ((row_offset, _), width) in enumerate(zip(rows, widths)):
+            if width == expected_width:
+                continue
+            prev_ok = idx == 0 or widths[idx - 1] == expected_width
+            next_ok = idx == len(widths) - 1 or widths[idx + 1] == expected_width
+            if not (prev_ok and next_ok):
+                continue
+            abs_offset = table_match.start() + row_offset
+            line_end = block.find("\n", row_offset)
+            row_text = block[row_offset : line_end if line_end != -1 else None]
+            issues.append(
+                ValidationIssue(
+                    kind="table_span_mismatch",
+                    message=(
+                        f"Table row has effective width {width} (columns, honoring "
+                        f"rowspan/colspan), expected {expected_width} to match the rest of the table"
+                    ),
+                    severity="warning",
+                    line_number=_line_number(text, abs_offset),
+                    snippet=_snippet(row_text),
                 )
+            )
 
 
 def validate_wikitext(text: str) -> ValidationResult:
