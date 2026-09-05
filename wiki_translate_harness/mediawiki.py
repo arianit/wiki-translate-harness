@@ -36,6 +36,8 @@ class MediaWikiClient:
     def __init__(self, api_url: str, user_agent: str, source_lang: str = "en", timeout: float = 30.0):
         self.api_url = api_url
         self.source_lang = source_lang
+        self._user_agent = user_agent
+        self._timeout = timeout
         self._hard_timeout = timeout + _HARD_TIMEOUT_MARGIN_S
         self._client = httpx.AsyncClient(
             headers={"User-Agent": user_agent},
@@ -137,7 +139,26 @@ class MediaWikiClient:
         namespace-relative link resolution in the render; it does not need
         to be a real page. formatversion=2 is required for `templates[].exists`
         to be a real boolean (formatversion=1 encodes it as a
-        present-but-empty-string key, which is easy to misread as falsy)."""
+        present-but-empty-string key, which is easy to misread as falsy).
+
+        Run as a *synchronous* request inside a thread-pool executor rather
+        than through self._client (httpx.AsyncClient), unlike every other
+        method here. Confirmed in production (2026-09-05, Mars and Earth):
+        this specific call — a large POST rendered through Scribunto on the
+        target wiki — hung well past `_hard_timeout` even with the same
+        asyncio.wait_for backstop used everywhere else, with the process
+        left idle (no CPU, no socket activity) rather than erroring. The
+        likely cause is asyncio.wait_for's documented limitation: on
+        timeout it cancels the awaited task and then *waits for that
+        cancellation to be honored* — if httpx/httpcore doesn't process
+        cancellation promptly while blocked on a stuck socket read, the
+        wait never returns. A `loop.run_in_executor` future doesn't have
+        this problem: cancelling it (what wait_for does on timeout)
+        detaches the asyncio-visible future immediately and lets the
+        caller proceed, regardless of whether the underlying thread's
+        blocking call ever completes — the thread is abandoned, not
+        awaited. This trades a possible leaked thread (bounded, harmless)
+        for a guaranteed-bounded wait (the actual bug being fixed)."""
         params = {
             "action": "parse",
             "contentmodel": "wikitext",
@@ -148,9 +169,18 @@ class MediaWikiClient:
             "formatversion": "2",
             "format": "json",
         }
-        resp = await asyncio.wait_for(
-            self._client.post(self.api_url, data=params), timeout=self._hard_timeout
-        )
+
+        def do_post() -> httpx.Response:
+            with httpx.Client(headers={"User-Agent": self._user_agent}, timeout=self._timeout) as client:
+                return client.post(self.api_url, data=params)
+
+        loop = asyncio.get_running_loop()
+        try:
+            resp = await asyncio.wait_for(loop.run_in_executor(None, do_post), timeout=self._hard_timeout)
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise MediaWikiError(
+                f"action=parse timed out for title {title!r} after {self._hard_timeout:.0f}s"
+            ) from exc
         resp.raise_for_status()
         data = resp.json()
 
