@@ -78,14 +78,47 @@ budget should have freed up and the queue drain command above should be
 retried to confirm Nagarjuna and Ashoka now actually complete successfully
 (rather than just no-longer-permanently-failing).
 
+## Queue drain retried — validator fix confirmed working, now blocked on a real OpenRouter billing issue
+
+PID 94422 (`--title Venus`) had finished by the time this was retried.
+Re-ran `wiki-translation-harness queue --max-articles 2 --provider openrouter
+--model deepseek/deepseek-v3.2 --live-validate` against the now-pending
+Nagarjuna/Ashoka lines:
+
+- **Ashoka: only 1 of 23 chunks failed** (down from 23/23 previously) —
+  confirms the `table_span_mismatch` validator fix actually works on the
+  real article, not just the isolated fixture/manual repro. The one
+  remaining failure (chunk 22, the same "Edicts of Ashoka" table chunk) is
+  now a *different*, unrelated cause (see below), not the validator bug.
+- **Nagarjuna: 16 of 16 chunks failed**, all HTTP 402.
+
+Root cause of both: **the OpenRouter account has run out of credits.**
+Confirmed directly via `GET /api/v1/credits`:
+`{"total_credits":35,"total_usage":35.115305831}` — balance is effectively
+$0 (slightly negative/exhausted). Every chunk request failed with HTTP 402,
+either `in_flight_budget_exhausted` (concurrent requests contending for
+what little budget remained) or, once that settled, plainly
+`"This request requires more credits... You requested up to 65536 tokens,
+but can only afford 10082"`. This is a billing/funding issue on the
+OpenRouter account, not a code defect — nothing in this repo can fix it.
+
+Both queue lines reset back to pending again (not `FAILED`, since neither
+is a real translation defect) in `~/code/wiki-translation-queue`, with a
+commit message explaining the credits exhaustion so a future session
+doesn't waste time re-investigating. Commit `5ac3880`, pushed.
+
 ## Immediate next steps
 
-1. Check whether PID 94422 (`--title Venus`) is still running; if not,
-   retry draining the queue:
+1. **Top up the OpenRouter account balance** at
+   https://openrouter.ai/settings/credits — nothing else productive can
+   happen against `--provider openrouter` until this is done. (Using
+   `--provider claude_code` instead, per `config.example.yaml`, is a
+   possible workaround if Claude Code CLI's own separate quota isn't also
+   exhausted — not checked this session.)
+2. Once credits are available, retry:
    `wiki-translation-harness queue --max-articles 2 --provider openrouter
    --model deepseek/deepseek-v3.2 --live-validate`
-2. Confirm Nagarjuna and Ashoka both complete and get pushed as `DONE` (or
-   investigate whatever new failure reason shows up, if any).
+   and confirm both Nagarjuna and Ashoka complete and push as `DONE`.
 3. Nothing else outstanding from the previous handoff — Jupiter was already
    fully delivered/QA'd with nothing pending; that section of the old
    handoff is stale and can be disregarded going forward.
