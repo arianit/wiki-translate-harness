@@ -65,7 +65,14 @@ _COUNTRY_DATA_LEAK_RE = re.compile(r"Country[\s_-]data[\s_]\S+", re.IGNORECASE)
 # Flagging this every time it's hit would only ever produce a permanently
 # unresolvable needs_human_review, since no amount of repair-round
 # re-prompting can create a missing module on the live target wiki.
-_KNOWN_HARMLESS_MISSING_DEPENDENCY_MODULES = {"Moduli:WikidataIB/i18n"}
+# Moduli:SST/registry: same treatment, confirmed embedded (via
+# `embeddedin`) in dozens of long-standing, fine-rendering sq.wikipedia
+# articles (e.g. Aristoteli, Skënderbeu, Abraham Lincoln, Batman) --
+# reached internally by some widely-used template/module chain (still
+# missing on sq.wikipedia itself), not something translating an article
+# introduces or could ever fix. Confirmed missing via the API on Nagarjuna
+# 2026-09-06.
+_KNOWN_HARMLESS_MISSING_DEPENDENCY_MODULES = {"Moduli:WikidataIB/i18n", "Moduli:SST/registry"}
 
 # Phantom template dependency: reported by action=parse's `templates` list but
 # absent from the article wikitext, absent from every existing template's raw

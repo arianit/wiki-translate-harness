@@ -128,6 +128,21 @@ def test_known_harmless_missing_dependency_module_not_flagged():
     assert find_live_issues(parse_result) == []
 
 
+def test_known_harmless_sst_registry_module_not_flagged():
+    """Moduli:SST/registry is confirmed missing on sq.wikipedia but is
+    embedded (via `embeddedin`) in dozens of long-standing, fine-rendering
+    sq.wikipedia articles -- a phantom internal dependency, not a
+    translation defect, and not fixable by re-prompting the model."""
+    parse_result = {
+        "text": "<p>irrelevant</p>",
+        "templates": [
+            {"ns": 10, "title": "Stampa:Infobox person", "exists": True},
+            {"ns": 828, "title": "Moduli:SST/registry", "exists": False},
+        ],
+    }
+    assert find_live_issues(parse_result) == []
+
+
 def test_other_missing_modules_still_flagged():
     """The known-harmless allowlist must not swallow genuinely missing
     templates/modules unrelated to it."""
