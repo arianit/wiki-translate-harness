@@ -13,6 +13,19 @@ would. This harness only fetches, splits, invokes, validates, retries,
 caches, verifies facts, estimates cost, and saves. It contains no
 translation prompts.
 
+## Architecture
+
+![Per-chunk translation pipeline: fetch and split an article, then for each chunk check the cache, build a prompt from the skill plus verified facts, send it to one of three swappable engines, validate and repair or flag for review, cache the result, then assemble, post-process, and write output and report files.](docs/architecture.svg)
+
+Each chunk moves through the same loop independently (dispatched across
+`workers` in parallel): a translation-memory cache check that lets a rerun
+resume for free, a prompt built from the skill file plus a verified-facts
+block computed by this harness, a call to whichever engine is selected
+(`claude_code`, `openrouter`, or `local` — all behind one duck-typed
+`chat_completion()` contract in `engines.py`, see **Choosing an engine**
+below), and a validate/repair/retry cycle that falls through to a
+human-review queue rather than silently shipping a broken chunk.
+
 ## Example Benchmark: Enji (deity)
 
 A recent benchmark translating the English article **"Enji (deity)"** to Albanian compared four models with blind evaluation by Claude Sonnet 4.5:
