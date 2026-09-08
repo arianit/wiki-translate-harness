@@ -102,6 +102,22 @@ async def test_no_issues_needs_no_repair():
 
 
 @pytest.mark.asyncio
+async def test_qa_skill_forwarded_to_assembly_repair_call():
+    chunk = _chunk("Bibliografia.\n{{harvc|last=Smith|c=Ch1}}\n")
+    client = FakeOpenRouterClient(["Bibliografia.\n{{Cite book|last=Smith}}\n"])
+    stats = RunStats()
+    qa_skill = SkillContent(skill_md="Check ref names before delivery.", reference_texts={})
+
+    await run_assembly_repair(
+        [chunk], _FakeSource(), _config(max_assembly_repair_rounds=3), client, _skill(), None,
+        FakeMediaWikiClient(raise_if_called=True), None, stats, qa_skill=qa_skill,
+    )
+
+    repair_system_prompt = client.calls[-1][0]["content"]
+    assert "Check ref names before delivery." in repair_system_prompt
+
+
+@pytest.mark.asyncio
 async def test_resolves_within_cap():
     # {{harvc}} is a static defect (validator.py) — no network needed to detect it.
     chunk = _chunk("Bibliografia.\n{{harvc|last=Smith|c=Ch1}}\n")

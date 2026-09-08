@@ -6,6 +6,7 @@ from wiki_translation_harness.cache import TranslationCache
 from wiki_translation_harness.models import Chunk, ChunkStatus, Config, ModelPricing, RunStats
 from wiki_translation_harness.skill_loader import SkillContent
 from wiki_translation_harness.translator import translate_chunk
+from wiki_translation_harness.verification import VerifiedFacts
 
 
 class FakeOpenRouterClient:
@@ -170,6 +171,81 @@ async def test_per_chunk_source_lang_used_in_skill_message(tmp_path: Path):
     await translate_chunk(_chunk(source_lang="sq"), _config(), client, _skill(), cache, None, stats)
     user_message = client.calls[-1][-1]["content"]
     assert "Source language: sq" in user_message
+
+
+@pytest.mark.asyncio
+async def test_repair_call_receives_qa_skill(tmp_path: Path):
+    client = FakeOpenRouterClient(
+        [
+            "[[broken link translation",  # initial translation: invalid
+            "'''Parisi''' është qytet me [[Lidhje|lidhje]].",  # repair: valid
+        ]
+    )
+    cache = TranslationCache(tmp_path / "c.sqlite3")
+    stats = RunStats()
+    qa_skill = SkillContent(skill_md="Check ref names before delivery.", reference_texts={})
+    outcome = await translate_chunk(
+        _chunk(), _config(), client, _skill(), cache, None, stats, qa_skill=qa_skill
+    )
+
+    assert outcome.validation.valid
+    repair_system_prompt = client.calls[-1][0]["content"]
+    assert "Check ref names before delivery." in repair_system_prompt
+    # the normal (first) translation call must never have seen it
+    first_system_prompt = client.calls[0][0]["content"]
+    assert "Check ref names before delivery." not in first_system_prompt
+    cache.close()
+
+
+@pytest.mark.asyncio
+async def test_established_rendering_recorded_after_successful_translation(tmp_path: Path):
+    client = FakeOpenRouterClient(
+        ["Shih {{ill|arkitektura e qëndrueshme|en|Sustainable architecture}}."]
+    )
+    cache = TranslationCache(tmp_path / "c.sqlite3")
+    stats = RunStats()
+    facts = VerifiedFacts(links={"Sustainable architecture": None})
+    await translate_chunk(_chunk(), _config(), client, _skill(), cache, None, stats, verified_facts=facts)
+
+    assert facts.established_renderings == {"Sustainable architecture": "arkitektura e qëndrueshme"}
+    cache.close()
+
+
+@pytest.mark.asyncio
+async def test_later_chunk_is_told_about_earlier_chunks_established_rendering(tmp_path: Path):
+    cache = TranslationCache(tmp_path / "c.sqlite3")
+    stats = RunStats()
+    facts = VerifiedFacts(links={"Sustainable architecture": None})
+
+    first_client = FakeOpenRouterClient(
+        ["Shih {{ill|arkitektura e qëndrueshme|en|Sustainable architecture}}."]
+    )
+    await translate_chunk(
+        _chunk(text="See [[Sustainable architecture]]."),
+        _config(),
+        first_client,
+        _skill(),
+        cache,
+        None,
+        stats,
+        verified_facts=facts,
+    )
+
+    second_client = FakeOpenRouterClient(["ok"])
+    await translate_chunk(
+        _chunk(text="Also [[Sustainable architecture]] again."),
+        _config(),
+        second_client,
+        _skill(),
+        cache,
+        None,
+        stats,
+        verified_facts=facts,
+    )
+    second_user_message = second_client.calls[-1][-1]["content"]
+    assert "arkitektura e qëndrueshme" in second_user_message
+    assert "reuse that exact rendering" in second_user_message
+    cache.close()
 
 
 @pytest.mark.asyncio

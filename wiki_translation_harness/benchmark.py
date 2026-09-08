@@ -43,6 +43,11 @@ async def run_benchmark(
     - evaluation: EvaluationResult if judge_model provided and evaluation succeeded, else None
     """
     skill = load_skill(base_config.skill_path, base_config.include_skill_references, base_config.skill_git_ref)
+    qa_skill = (
+        load_skill(base_config.qa_skill_path, base_config.include_skill_references, base_config.skill_git_ref)
+        if base_config.qa_skill_path is not None
+        else None
+    )
     cache = TranslationCache(base_config.cache_db_path) if base_config.cache else None
 
     effective_lang = item.source_lang or base_config.source_lang
@@ -80,7 +85,8 @@ async def run_benchmark(
                 async with sem:
                     try:
                         await translate_chunk(
-                            chunk, model_config, llm_client, skill, cache, pricing, stats_tracker.stats
+                            chunk, model_config, llm_client, skill, cache, pricing, stats_tracker.stats,
+                            qa_skill=qa_skill,
                         )
                     except EngineError as exc:
                         chunk.status = ChunkStatus.FAILED

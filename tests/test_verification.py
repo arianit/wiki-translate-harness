@@ -205,6 +205,47 @@ def test_build_verified_facts_block_template_with_params():
     assert "do not invent or translate them" in block
 
 
+def test_record_established_renderings_extracts_ill_calls():
+    facts = VerifiedFacts(links={"Sustainable architecture": None})
+    facts.record_established_renderings(
+        "...ideja e {{ill|arkitekturës së qëndrueshme|en|Sustainable architecture}} u prezantua..."
+    )
+    assert facts.established_renderings == {"Sustainable architecture": "arkitekturës së qëndrueshme"}
+
+
+def test_record_established_renderings_shorthand_without_title_param():
+    facts = VerifiedFacts()
+    facts.record_established_renderings("See {{ill|Foo|en}} for more.")
+    assert facts.established_renderings == {"Foo": "Foo"}
+
+
+def test_record_established_renderings_ignores_non_english_ill():
+    facts = VerifiedFacts()
+    facts.record_established_renderings("{{ill|Foo|de|Foo}}")
+    assert facts.established_renderings == {}
+
+
+def test_record_established_renderings_first_occurrence_wins():
+    facts = VerifiedFacts()
+    facts.record_established_renderings("{{ill|First rendering|en|Some Topic}}")
+    facts.record_established_renderings("{{ill|Second rendering|en|Some Topic}}")
+    assert facts.established_renderings == {"Some Topic": "First rendering"}
+
+
+def test_verified_facts_block_reuses_established_rendering_for_unconfirmed_link():
+    facts = VerifiedFacts(
+        links={"Sustainable architecture": None},
+        established_renderings={"Sustainable architecture": "arkitektura e qëndrueshme"},
+    )
+    block = build_verified_facts_block("[[Sustainable architecture]]", facts)
+    assert "already rendered elsewhere in this article" in block
+    assert "{{ill|arkitektura e qëndrueshme|en|Sustainable architecture}}" in block
+    assert "NOT FOUND" in block
+    # Once an established rendering exists, the language-count fallback note
+    # is redundant and should not also be printed for the same link.
+    assert "other Wikipedia language" not in block
+
+
 @pytest.mark.asyncio
 async def test_verify_wikitext_end_to_end_with_mocks(tmp_path: Path):
     with respx.mock() as mock:

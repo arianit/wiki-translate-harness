@@ -124,6 +124,42 @@ def test_repair_messages_include_errors(tmp_path: Path):
     assert "[[broken" in messages[1]["content"]
 
 
+def test_translation_messages_never_include_qa_skill_content(tmp_path: Path):
+    """The QA/pre-delivery checklist must never reach a normal translation
+    call — build_translation_messages has no parameter for it at all."""
+    skill_dir = _make_skill_dir(tmp_path)
+    skill = load_skill(skill_dir, include_references=False)
+    messages = build_translation_messages(skill, "en", "sq", "Paris", "Lead", "text")
+    assert "qa checklist" not in messages[0]["content"].lower()
+
+
+def test_repair_messages_omit_qa_skill_by_default(tmp_path: Path):
+    skill_dir = _make_skill_dir(tmp_path)
+    skill = load_skill(skill_dir, include_references=False)
+    messages = build_repair_messages(skill, "en", "sq", "Paris", "Lead", "[[broken", ["e"])
+    assert "qa checklist" not in messages[0]["content"].lower()
+
+
+def test_repair_messages_include_qa_skill_when_provided(tmp_path: Path):
+    """QA content is appended to a repair call only — the one case where
+    validate_wikitext has already found a real problem — never to an
+    ordinary translation call."""
+    skill_dir = _make_skill_dir(tmp_path)
+    skill = load_skill(skill_dir, include_references=False)
+    qa_dir = tmp_path / "wikiqa"
+    qa_dir.mkdir()
+    (qa_dir / "SKILL.md").write_text(
+        "---\nname: wikiqa\ndescription: test\n---\n\n# QA\n\nCheck ref names before delivery.\n"
+    )
+    qa_skill = load_skill(qa_dir, include_references=False)
+
+    messages = build_repair_messages(
+        skill, "en", "sq", "Paris", "Lead", "[[broken", ["link: unbalanced"], qa_skill=qa_skill
+    )
+    assert "Check ref names before delivery." in messages[0]["content"]
+    assert "Translation rules here." in messages[0]["content"]
+
+
 def test_multi_path_concatenates_bodies_in_order(tmp_path: Path):
     first = _make_skill_dir(tmp_path)
     second = _make_second_skill_dir(tmp_path)

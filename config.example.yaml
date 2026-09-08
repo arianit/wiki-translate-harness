@@ -33,15 +33,24 @@ chunk_max_tokens: 2500
 # The skill is split across three directories — enwiki-sqwiki-translation
 # (translation), wikiterms (terminology/link verification), wikiqa (pre-delivery
 # checklist) — that an interactive agent invokes on demand via a Skill tool.
-# This harness has no such mechanism, so it loads all three up front and
-# concatenates them into one system prompt; list translation first, since its
-# content frames the other two. A single path (just translation) also still
-# works, e.g. if you want the harness's own verification.py to fully replace
-# wikiterms's role instead of also sending the model that skill's text.
+# This harness has no such mechanism, but it also doesn't send all three on
+# every request: skill_path (translation + wikiterms) is sent on every
+# normal translation/repair call, while qa_skill_path (wikiqa) below is
+# loaded separately and only ever appended to a repair call — the one case
+# where validate_wikitext has already found a real problem and its
+# pre-delivery-checklist content is actually relevant. A single path (just
+# translation) also still works, e.g. if you want the harness's own
+# verification.py to fully replace wikiterms's role instead of also sending
+# the model that skill's text.
 skill_path:
   - ~/.claude/skills/enwiki-sqwiki-translation
   - ~/.claude/skills/wikiterms
-  - ~/.claude/skills/wikiqa
+# Loaded the same way as skill_path but only ever reaches a repair call
+# (see build_repair_messages) — never sent on a normal translation call, so
+# most sections (which never fail validation) never pay for its tokens.
+# Set to null/remove to disable it and rely solely on skill_path's content
+# plus the specific validation errors listed during repair.
+qa_skill_path: ~/.claude/skills/wikiqa
 # On: sqwiki-verified.md's confirmed template names/params reach the model.
 # Costs more tokens per request; off falls back to guessing on anything not
 # covered by the harness's own live verification (see wiki_translation_harness/verification.py).

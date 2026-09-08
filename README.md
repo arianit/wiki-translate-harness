@@ -66,6 +66,39 @@ live-research steps itself and hands the model verified facts instead (see
 **Fact verification** below) — this is what makes the "no tools" limitation
 workable in practice.
 
+**Only the skill content actually needed for a given call is sent.** The
+skill is split across three directories — enwiki-sqwiki-translation
+(translation judgment), wikiterms (terminology/link conventions), wikiqa (the
+pre-delivery QA checklist). `skill_path` (translation + wikiterms) is
+concatenated into the system prompt of *every* normal translation and repair
+call, since both are always relevant. `qa_skill_path` (wikiqa) is loaded
+separately and appended *only* to a repair call
+(`skill_loader.build_repair_messages`'s `qa_skill` parameter) — the one case
+where `validate_wikitext` has already found a real defect, which is exactly
+when wikiqa's checklist becomes relevant. Most sections never fail
+validation, so most calls never pay wikiqa's token cost at all; measured
+against the real skill files, this cuts the system prompt on an ordinary
+translation call by about 29% (see **Benchmarking this change** below).
+
+**A compact, growing article-level terminology registry keeps unconfirmed
+renderings consistent across sections**, without the harness inventing any
+translation judgment of its own. `VerifiedFacts` (see
+`wiki_translation_harness/verification.py`) already carries confirmed
+link/template targets and, for a rewrite, the existing target article's own
+terminology (`sibling_links`) — all already scoped down to just the terms
+appearing in each individual chunk before being sent
+(`build_verified_facts_block`), not resent wholesale. On top of that,
+`established_renderings` now also tracks the model's own choices as they
+happen: whenever a chunk's own translated output uses `{{ill|display|en|
+Title}}` for a source-language term with no confirmed target-wiki sitelink,
+that specific rendering is recorded (first occurrence wins) and relayed —
+as a plain fact, not an instruction on how to translate — to every other
+chunk of the same article that later mentions the same term, so the second
+mention doesn't independently reinvent its own Albanian phrasing. Because
+chunks are dispatched worker-slot by worker-slot rather than all at once,
+this registry is already populated by the time most later chunks build
+their own `verified_facts_block`.
+
 ## Setup
 
 ```bash

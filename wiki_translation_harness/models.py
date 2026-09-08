@@ -217,20 +217,30 @@ class Config(BaseModel):
     chunk_min_tokens: int = 1500
     chunk_max_tokens: int = 2500
 
-    # A single skill directory, or a list of them. The skill is split across
-    # three directories — enwiki-sqwiki-translation (translate), wikiterms,
-    # wikiqa — that an interactive agent invokes on demand via a Skill tool;
-    # this harness has no such mechanism, so by default it loads all three
-    # up front and concatenates them into one system prompt (see
-    # skill_loader.load_skill). translate is listed first since its content
-    # frames the other two; the other two's order doesn't otherwise matter
-    # for a tool-less call.
+    # A single skill directory, or a list of them: the translation-judgment
+    # guidance sent on *every* normal translation/repair call (see
+    # skill_loader.load_skill). Split across two directories by default —
+    # enwiki-sqwiki-translation (translate) and wikiterms (terminology/link
+    # conventions, e.g. {{ill}} usage) — concatenated into one system
+    # prompt, translate listed first since its content frames the other.
+    # wikiqa (the pre-delivery QA checklist) deliberately is NOT here: it's
+    # loaded separately as qa_skill_path below and only ever reaches a
+    # repair call, which only happens once validate_wikitext has already
+    # found a real problem — sending its checklist on every ordinary
+    # section (most of which never fail validation) would just be wasted
+    # tokens repeated wholesale on every request.
     skill_path: Path | list[Path] = Field(
         default_factory=lambda: [
             Path.home() / ".claude" / "skills" / "enwiki-sqwiki-translation",
             Path.home() / ".claude" / "skills" / "wikiterms",
-            Path.home() / ".claude" / "skills" / "wikiqa",
         ]
+    )
+    # Loaded the same way as skill_path but kept separate and appended only
+    # to repair messages (skill_loader.build_repair_messages) — never sent
+    # on a normal translation call. None disables it (repair then relies
+    # solely on skill_path's content plus the specific errors listed).
+    qa_skill_path: Path | list[Path] | None = Field(
+        default_factory=lambda: Path.home() / ".claude" / "skills" / "wikiqa"
     )
     include_skill_references: bool = False
     # If set (e.g. "HEAD"), the skill is read from this git revision instead
@@ -375,9 +385,11 @@ class Config(BaseModel):
             return Path(v).expanduser()
         return v
 
-    @field_validator("skill_path", mode="before")
+    @field_validator("skill_path", "qa_skill_path", mode="before")
     @classmethod
     def _expand_user_skill_path(cls, v: object) -> object:
+        if v is None:
+            return v
         if isinstance(v, (str, Path)):
             return Path(v).expanduser()
         if isinstance(v, (list, tuple)):

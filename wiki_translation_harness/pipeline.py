@@ -128,6 +128,7 @@ async def run_assembly_repair(
     on_retry: RetryCallback | None = None,
     cache: TranslationCache | None = None,
     facts: VerifiedFacts | None = None,
+    qa_skill: SkillContent | None = None,
 ) -> tuple[str, list[ValidationIssue], int, dict[str, str]]:
     """Post-processes and validates the assembled article, repairing only
     the chunks implicated by each round's findings, up to
@@ -266,6 +267,7 @@ async def run_assembly_repair(
                     errors_for_chunk,
                     pricing,
                     on_retry=on_retry,
+                    qa_skill=qa_skill,
                 )
                 stats.tokens_in += repair_result.prompt_tokens
                 stats.tokens_out += repair_result.completion_tokens
@@ -362,6 +364,11 @@ async def run_pipeline(
     stats = stats_tracker.stats
 
     skill = load_skill(config.skill_path, config.include_skill_references, config.skill_git_ref)
+    qa_skill = (
+        load_skill(config.qa_skill_path, config.include_skill_references, config.skill_git_ref)
+        if config.qa_skill_path is not None
+        else None
+    )
     cache = TranslationCache(config.cache_db_path) if config.cache else None
     verification_cache = VerificationCache(config.verification_db_path) if config.verify_links else None
 
@@ -460,6 +467,7 @@ async def run_pipeline(
                             stats,
                             on_retry=on_retry,
                             verified_facts=facts,
+                            qa_skill=qa_skill,
                         )
                     except EngineError as exc:
                         chunk.status = ChunkStatus.FAILED
@@ -557,7 +565,7 @@ async def run_pipeline(
             target_mw_client = mw_pool.get(config.target_lang)
             assembled, combined_issues, rounds_used, citation_languages_filled = await run_assembly_repair(
                 chunks, source, config, llm_client, skill, pricing, target_mw_client, citation_client, stats, on_retry,
-                cache, facts,
+                cache, facts, qa_skill,
             )
 
             if combined_issues:

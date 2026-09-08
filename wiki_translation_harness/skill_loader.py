@@ -294,8 +294,21 @@ def build_repair_messages(
     section_title: str,
     invalid_text: str,
     errors: list[str],
+    qa_skill: SkillContent | None = None,
 ) -> list[dict[str, str]]:
+    """qa_skill (the wikiqa pre-delivery checklist, loaded separately from
+    the main translation skill(s) — see Config.qa_skill_path) is appended
+    only here, never in build_translation_messages: its content is only
+    relevant once validate_wikitext has already found a real problem, which
+    is exactly when this function is called. Sending it on every ordinary
+    translation call would repeat a large, mostly-irrelevant block of text
+    on every section instead of only the ones that actually need it."""
     system = f"{_REPAIR_FRAME}\n\n---\n\n{skill.combined}"
+    if qa_skill is not None:
+        system += (
+            "\n\n---\n\n# Additional QA reference (known defect patterns to watch for while fixing "
+            f"the listed errors)\n\n{qa_skill.combined}"
+        )
     error_list = "\n".join(f"- {e}" for e in errors)
     user = (
         f"Source language: {source_lang}\n"

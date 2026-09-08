@@ -27,8 +27,9 @@ async def repair_chunk(
     errors: list[str],
     pricing: ModelPricing | None,
     on_retry: RetryCallback | None = None,
+    qa_skill: SkillContent | None = None,
 ) -> TranslationResult:
     messages = build_repair_messages(
-        skill, source_lang, target_lang, article_title, section_title, invalid_text, errors
+        skill, source_lang, target_lang, article_title, section_title, invalid_text, errors, qa_skill=qa_skill
     )
     return await run_completion(client, model, messages, temperature, pricing, on_retry=on_retry)

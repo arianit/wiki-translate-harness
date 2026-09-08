@@ -113,6 +113,29 @@ def extract_template_params(template_wikitext: str) -> list[str]:
     return list(seen.keys())
 
 
+def _extract_ill_renderings(translated_text: str) -> dict[str, str]:
+    """{{ill|Display|en|Source Title}} (or the lt=-free shorthand
+    {{ill|Display|en}}, where Display doubles as the source title) states,
+    in the model's own output, exactly how it chose to render one specific
+    unconfirmed source-language term — first-seen order, source title ->
+    display text."""
+    code = mwp.parse(translated_text)
+    renderings: dict[str, str] = {}
+    for tmpl in code.filter_templates(recursive=True):
+        if str(tmpl.name).strip().lower() != "ill":
+            continue
+        if not tmpl.has(1) or not tmpl.has(2):
+            continue
+        display = str(tmpl.get(1).value).strip()
+        lang = str(tmpl.get(2).value).strip().lower()
+        if lang != "en" or not display:
+            continue
+        title = str(tmpl.get(3).value).strip() if tmpl.has(3) else ""
+        title = title or display
+        renderings.setdefault(title, display)
+    return renderings
+
+
 def _chunked(items: list[str], size: int) -> list[list[str]]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
@@ -296,9 +319,29 @@ class VerifiedFacts:
     # mechanical proxy for "distinct, cross-culturally notable topic" vs
     # "too generic to bother linking" (e.g. a common noun like "egg").
     not_found_link_language_counts: dict[str, int] = field(default_factory=dict)
+    # Compact, growing article-level "translation decisions" registry: for a
+    # source link target with no confirmed target-wiki sitelink, the model
+    # itself still has to render it somehow (typically {{ill|display|en|
+    # Title}}) — the first chunk to translate that term records its own
+    # choice here (see record_established_renderings), and every later
+    # chunk containing the same source title is told to reuse it. This is
+    # not the harness inventing a translation — it only relays a decision
+    # the model already made elsewhere in this same article, keyed by
+    # source title, mutated in place as chunks complete so later chunks
+    # (dispatched after an earlier one frees a worker slot) benefit from it.
+    established_renderings: dict[str, str] = field(default_factory=dict)
 
     def is_empty(self) -> bool:
         return not self.links and not self.templates and not self.existing_target_title
+
+    def record_established_renderings(self, translated_text: str) -> None:
+        """Scans one chunk's own translated output for {{ill|display|en|
+        Title}} calls and records the display text chosen for each source
+        Title, first occurrence wins. Mechanical extraction only — it reads
+        back what the model already wrote, the same way build_verified_facts_block
+        only ever states what already exists."""
+        for title, display in _extract_ill_renderings(translated_text).items():
+            self.established_renderings.setdefault(title, display)
 
 
 async def _resolve_cached_then_live(
@@ -446,6 +489,14 @@ def build_verified_facts_block(chunk_text: str, facts: VerifiedFacts) -> str:
         if target:
             link_lines.append(f"- [[{title}]] -> confirmed as [[{target}]]")
         else:
+            established = facts.established_renderings.get(title)
+            if established:
+                link_lines.append(
+                    f"- [[{title}]] -> NOT FOUND on target wiki; already rendered elsewhere in "
+                    f"this article as {{{{ill|{established}|en|{title}}}}} — reuse that exact "
+                    "rendering here instead of choosing new wording"
+                )
+                continue
             count = facts.not_found_link_language_counts.get(title)
             if count is not None:
                 note = (

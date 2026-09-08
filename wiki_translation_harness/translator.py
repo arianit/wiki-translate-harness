@@ -47,6 +47,7 @@ async def translate_chunk(
     stats: RunStats,
     on_retry: RetryCallback | None = None,
     verified_facts: VerifiedFacts | None = None,
+    qa_skill: SkillContent | None = None,
 ) -> ChunkOutcome:
     facts_block = build_verified_facts_block(chunk.text, verified_facts) if verified_facts else ""
     facts_hash = hashlib.sha256(facts_block.encode("utf-8")).hexdigest()[:16] if facts_block else ""
@@ -61,6 +62,8 @@ async def translate_chunk(
         chunk.translated_text = cached_text
         chunk.status = ChunkStatus.CACHED
         validation = validate_wikitext(cached_text) if config.validate_output else ValidationResult(valid=True)
+        if verified_facts is not None:
+            verified_facts.record_established_renderings(cached_text)
         return ChunkOutcome(chunk=chunk, validation=validation, from_cache=True, repair_attempts=0, prompt_tokens=0, completion_tokens=0, latency_s=0.0)
 
     stats.cache_misses += 1
@@ -103,6 +106,7 @@ async def translate_chunk(
                 errors,
                 pricing,
                 on_retry=on_retry,
+                qa_skill=qa_skill,
             )
             _accumulate(stats, repair_result)
             total_prompt_tokens += repair_result.prompt_tokens
@@ -126,6 +130,12 @@ async def translate_chunk(
         chunk.status = ChunkStatus.REPAIRED if repair_attempts > 0 else ChunkStatus.TRANSLATED
     else:
         chunk.status = ChunkStatus.FAILED
+
+    if verified_facts is not None and chunk.status in (ChunkStatus.TRANSLATED, ChunkStatus.REPAIRED):
+        # Relays this chunk's own {{ill}} choices forward to whichever of
+        # this article's other chunks haven't started yet (or haven't built
+        # their facts_block yet) — see VerifiedFacts.record_established_renderings.
+        verified_facts.record_established_renderings(translated_text)
 
     if cache is not None and chunk.status != ChunkStatus.FAILED:
         cache.set(key, config.model, chunk.source_lang, config.target_lang, chunk.text, translated_text)
