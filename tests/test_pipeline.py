@@ -18,7 +18,11 @@ import pytest
 
 from wiki_translation_harness.cache import TranslationCache, compute_key
 from wiki_translation_harness.models import Chunk, Config, RunStats
-from wiki_translation_harness.pipeline import run_assembly_repair
+from wiki_translation_harness.pipeline import (
+    _chunk_mentions_ref,
+    _ref_names_in_message,
+    run_assembly_repair,
+)
 from wiki_translation_harness.skill_loader import SkillContent
 
 
@@ -256,6 +260,89 @@ async def test_unlocalized_issue_reaches_every_chunk():
     for call in client.calls:
         user_message = call[-1]["content"]
         assert "Gabim citimi" in user_message
+
+
+def test_ref_names_in_message_extracts_escaped_ref_tag():
+    # Cite error messages carry the offending <ref name="X"/> tag HTML-escaped,
+    # so `name="X"` survives into the stripped message and can be matched back
+    # to the chunk that mentions it.
+    assert _ref_names_in_message(
+        'Cite error rendered on the page: Gabim citimi: Referencë &lt;ref name="RefA"/&gt; pa përmbajtje'
+    ) == ["RefA"]
+    # A finding that doesn't name a ref (e.g. Scribunto error, a leak) gives no names.
+    assert _ref_names_in_message("Lua/Scribunto error rendered on the page: Script error") == []
+
+
+def test_chunk_mentions_ref_matches_translated_then_source():
+    ref_chunk = _chunk("Vijazimi.\n<ref name=\"RefA\"/>\n", order=0)
+    assert _chunk_mentions_ref(ref_chunk, "RefA")
+    assert not _chunk_mentions_ref(_chunk("Prozë krejt e pastër.", order=1), "RefA")
+
+
+@pytest.mark.asyncio
+async def test_unlocalized_ref_issue_only_reaches_chunk_mentioning_that_ref():
+    # An orphaned named ref can't be pinned to a chunk by line number, but its
+    # message names `<ref name="RefA"/>` — the finding should reach ONLY the
+    # chunk whose text mentions that ref, not every chunk.
+    clean = _chunk("Prozë krejt e pastër.", order=0)
+    with_ref = _chunk("Vijazimi.\nKjo qe e dhëna.<ref name=\"RefA\"/>\n", order=1)
+    orphaned_ref_html = (
+        '<span class="error mw-ext-cite-error">Gabim citimi: Referencë e emërtuar '
+        '&lt;ref name="RefA"/&gt; u thirr por nuk u përcaktua kurrë</span>'
+    )
+    mw_client = FakeMediaWikiClient(
+        responses=[
+            {"text": orphaned_ref_html, "templates": []},
+            {"text": "<p>clean</p>", "templates": []},
+        ]
+    )
+    client = FakeOpenRouterClient(["Chunk with ref fixed."])
+    stats = RunStats()
+
+    assembled, issues, rounds, _ = await run_assembly_repair(
+        [clean, with_ref], _FakeSource(), _config(live_validate=True, max_assembly_repair_rounds=2),
+        client, _skill(), None, mw_client, None, stats,
+    )
+
+    assert issues == []
+    assert rounds == 1
+    assert len(client.calls) == 1  # only the ref-holding chunk got a repair call
+    assert with_ref.translated_text == "Chunk with ref fixed."
+    assert clean.translated_text == "Prozë krejt e pastër."  # untouched
+
+
+@pytest.mark.asyncio
+async def test_unlocalized_ref_issue_targets_only_first_matching_chunk():
+    # Two chunks both mention the ref (e.g. usage in two sections). Broadcasting
+    # to both would let each "fix" the orphaned ref by inserting its own
+    # definition — producing a define-twice error next round and an
+    # oscillating repair loop. The finding must go to the FIRST matching chunk
+    # only.
+    clean = _chunk("Prozë krejt e pastër.", order=0)
+    first = _chunk("Seksioni A.<ref name=\"RefA\"/>\n", order=1)
+    second = _chunk("Seksioni B.<ref name=\"RefA\"/>\n", order=2)
+    orphaned_ref_html = (
+        '<span class="error mw-ext-cite-error">Gabim citimi: Referencë e emërtuar '
+        '&lt;ref name="RefA"/&gt; u thirr por nuk u përcaktua kurrë</span>'
+    )
+    mw_client = FakeMediaWikiClient(
+        responses=[
+            {"text": orphaned_ref_html, "templates": []},
+            {"text": "<p>clean</p>", "templates": []},
+        ]
+    )
+    client = FakeOpenRouterClient(["Seksioni A fixed."])
+    stats = RunStats()
+
+    await run_assembly_repair(
+        [clean, first, second], _FakeSource(), _config(live_validate=True, max_assembly_repair_rounds=2),
+        client, _skill(), None, mw_client, None, stats,
+    )
+
+    assert len(client.calls) == 1
+    assert first.translated_text == "Seksioni A fixed."
+    assert second.translated_text == "Seksioni B.<ref name=\"RefA\"/>\n"  # untouched
+    assert clean.translated_text == "Prozë krejt e pastër."  # untouched
 
 
 @pytest.mark.asyncio

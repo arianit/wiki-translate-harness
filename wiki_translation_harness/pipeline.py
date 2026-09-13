@@ -36,7 +36,6 @@ from wiki_translation_harness.models import (
     ModelPricing,
     RunStats,
     ValidationIssue,
-    ValidationResult,
 )
 from wiki_translation_harness.openrouter import RetryCallback
 from wiki_translation_harness.output import (
@@ -78,6 +77,37 @@ def _chunk_for_line(spans: list[tuple[Chunk, int, int]], line_number: int | None
         if start <= line_number <= end:
             return chunk
     return None
+
+
+# MediaWiki's Cite extension renders its error messages with the offending
+# ref's tag HTML-escaped inside the message text (e.g. "&lt;ref name="X"/&gt;").
+# `name="X"` survives that escaping, which is what lets a live-parse finding
+# with no wikitext-line mapping be pinned back to the ref(s) it's about.
+_REF_NAME_IN_MESSAGE_RE = re.compile(r"name\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+
+
+def _ref_names_in_message(message: str) -> list[str]:
+    """Ref names named by a cite error message (an orphaned named ref, a
+    ref "defined multiple times", ...) — empty list when the message doesn't
+    name one."""
+    return [m.group(1) for m in _REF_NAME_IN_MESSAGE_RE.finditer(message)]
+
+
+def _chunk_mentions_ref(chunk: Chunk, ref_name: str) -> bool:
+    """True if the chunk's wikitext contains a <ref name="{ref_name}"> or
+    <ref name="{ref_name}"/> occurrence. Checks the translated text first
+    (the text being repaired), falling back to the source text in case
+    translation dropped/renamed the markup around the ref."""
+    for text in (chunk.translated_text, chunk.text):
+        if not text:
+            continue
+        if re.search(
+            r"<ref\b[^>\n]*\bname\s*=\s*[\"']" + re.escape(ref_name) + r"[\"']",
+            text,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
 
 
 async def _validate_assembled(
@@ -233,7 +263,7 @@ async def run_assembly_repair(
         _, spans = assemble_chunks_with_spans(chunks)
 
         localized: dict[int, list[str]] = {}
-        unlocalized: list[str] = []
+        unlocalized: list[tuple[ValidationIssue, str]] = []
         for issue in combined_issues:
             finding = issue.as_finding()
             text_line = f"{finding['severity']}: {finding['explanation']}"
@@ -243,15 +273,53 @@ async def run_assembly_repair(
             if chunk is not None:
                 localized.setdefault(id(chunk), []).append(text_line)
             else:
-                # Can't be pinned to one chunk (e.g. most live-API findings
-                # — a rendered error message doesn't literally appear in
-                # the source wikitext to locate). Given to every chunk
-                # rather than dropped, since an issue no chunk ever sees
-                # can never be fixed within the round cap.
-                unlocalized.append(text_line)
+                # Can't be pinned to one chunk by line number (e.g. most
+                # live-API findings — a rendered error message doesn't
+                # literally appear in the source wikitext to locate).
+                unlocalized.append((issue, text_line))
+
+        # An unlocated finding still can't be dropped: an issue no chunk
+        # ever sees can never be fixed within the round cap. But most
+        # unlocated findings are Cite-extension errors (an orphaned named
+        # ref, a ref "defined multiple times") whose message names the
+        # offending <ref name="..."> — those only make sense in a chunk
+        # that actually mentions that ref: a chunk that never sees the ref
+        # can't fix it (a broadcast just burns one call per round for
+        # nothing), and letting several siblings each "fix" an orphaned ref
+        # by inserting their own definition creates a new define-twice
+        # finding next round, so the loop oscillates instead of converging.
+        # So: hand a ref-named finding to the FIRST chunk (in order) that
+        # mentions the ref — one repair target, exactly the chunk most
+        # likely to own the definition — not to every match. Findings with
+        # no extractable ref name keep the old all-chunk broadcast.
+        targeted_unlocalized: dict[int, list[str]] = {}
+        broadcast_unlocalized: list[str] = []
+        for issue, text_line in unlocalized:
+            ref_names = _ref_names_in_message(issue.message)
+            target = next(
+                (
+                    c
+                    for c in chunks
+                    if any(_chunk_mentions_ref(c, name) for name in ref_names)
+                ),
+                None,
+            )
+            if target is not None:
+                logger.info(
+                    "Targeted unlocalized %r finding to chunk %d (mentions the named ref) instead of "
+                    "broadcasting to all %d chunk(s)",
+                    issue.kind, target.order, len(chunks),
+                )
+                targeted_unlocalized.setdefault(id(target), []).append(text_line)
+            else:
+                broadcast_unlocalized.append(text_line)
 
         for chunk in chunks:
-            errors_for_chunk = localized.get(id(chunk), []) + unlocalized
+            errors_for_chunk = (
+                localized.get(id(chunk), [])
+                + targeted_unlocalized.get(id(chunk), [])
+                + broadcast_unlocalized
+            )
             if not errors_for_chunk:
                 continue
             try:

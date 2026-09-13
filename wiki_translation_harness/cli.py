@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -336,14 +338,27 @@ def queue(
         base_url=base_url,
     )
     cfg = build_config(config_path, overrides)
-    setup_logging(cfg.log_dir)
+    # INFO (not the module default of WARNING): queue mode has no Rich Live
+    # table to show progress, so ProgressReporter's on_event=logger.info
+    # (wired in queue_runner.py) is the only per-article/per-chunk trail
+    # this run has. At the default WARNING level those INFO lines only ever
+    # reached logs/run.log, invisible on an unattended run's console/log
+    # capture until something errors -- see GitHub issue #3. The formatter
+    # in logging_setup.py already prefixes every line with %(asctime)s, so
+    # raising this one command's console level is enough to get a live,
+    # timestamped trail without touching the interactive Live-table path.
+    setup_logging(cfg.log_dir, console_level=logging.INFO)
 
+    start = datetime.now()
+    console.print(f"Queue run started at {start:%Y-%m-%d %H:%M:%S}")
     stats_tracker = asyncio.run(
         run_queue_mode(cfg, queue_repo_dir=queue_repo_dir, max_articles=max_articles, stale_hours=stale_hours)
     )
+    end = datetime.now()
     stats = stats_tracker.stats
     console.print(
-        f"\nQueue run done. Completed: {stats.articles_completed}, failed: {stats.articles_failed}. "
+        f"\nQueue run done at {end:%Y-%m-%d %H:%M:%S} (started {start:%H:%M:%S}, "
+        f"ran {end - start}). Completed: {stats.articles_completed}, failed: {stats.articles_failed}. "
         f"Estimated cost: ${stats.estimated_cost_usd:.4f}."
     )
 
