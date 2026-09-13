@@ -25,7 +25,7 @@ provider: claude_code
 # own value to disable the offer entirely.
 # fallback_provider: claude_code
 # No `model:` here either, for the same reason -- let it auto-derive.
-workers: 4
+workers: 2
 sequential: true
 temperature: 0
 max_retries: 5

@@ -209,7 +209,7 @@ class Config(BaseModel):
     # uses a cheaper/faster model for ~80% of standard body text while
     # reserving the stronger model for markup-critical sections.
     complex_model: str | None = None
-    workers: int = 4
+    workers: int = 2
     # Process articles one at a time (still using up to `workers` concurrent
     # chunk translations within each article) instead of starting every
     # requested article's chunks concurrently. Bounds the blast radius of a
