@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from wiki_translation_harness.cache import TranslationCache, compute_key
-from wiki_translation_harness.models import Chunk, Config, RunStats
+from wiki_translation_harness.models import Chunk, Config, RunStats, ValidationIssue
 from wiki_translation_harness.pipeline import (
     _chunk_mentions_ref,
     _ref_names_in_message,
@@ -262,15 +262,33 @@ async def test_unlocalized_issue_reaches_every_chunk():
         assert "Gabim citimi" in user_message
 
 
-def test_ref_names_in_message_extracts_escaped_ref_tag():
-    # Cite error messages carry the offending <ref name="X"/> tag HTML-escaped,
-    # so `name="X"` survives into the stripped message and can be matched back
-    # to the chunk that mentions it.
-    assert _ref_names_in_message(
-        'Cite error rendered on the page: Gabim citimi: Referencë &lt;ref name="RefA"/&gt; pa përmbajtje'
-    ) == ["RefA"]
+def test_ref_names_in_message_extracts_quoted_ref_name():
+    # Real Cite error text never echoes `name="X"` tag syntax back — confirmed
+    # against a live sq.wikipedia.org parse (see test_live_validator.py): it
+    # just quotes the bare name ("...refs e quajtura "RefA""). Only
+    # orphaned_named_ref/cite_error kinds get read this way — other kinds
+    # that happen to quote text too (e.g. unexpanded_template's repr'd
+    # title) must not be misread as naming a ref.
+    orphaned = ValidationIssue(
+        kind="orphaned_named_ref",
+        message=(
+            "Cite error rendered on the page: Gabim citimi: Etiketë <ref> e "
+            'pavlefshme;\nasnjë tekst nuk u dha për refs e quajtura "RefA"'
+        ),
+    )
+    assert _ref_names_in_message(orphaned) == ["RefA"]
+
     # A finding that doesn't name a ref (e.g. Scribunto error, a leak) gives no names.
-    assert _ref_names_in_message("Lua/Scribunto error rendered on the page: Script error") == []
+    lua_error = ValidationIssue(
+        kind="lua_script_error", message="Lua/Scribunto error rendered on the page: Script error"
+    )
+    assert _ref_names_in_message(lua_error) == []
+
+    # Quoted text, but not a ref-naming kind — must not be read as a ref name.
+    missing_template = ValidationIssue(
+        kind="unexpanded_template", message="Template 'RefA' does not exist on the target wiki"
+    )
+    assert _ref_names_in_message(missing_template) == []
 
 
 def test_chunk_mentions_ref_matches_translated_then_source():
@@ -287,8 +305,8 @@ async def test_unlocalized_ref_issue_only_reaches_chunk_mentioning_that_ref():
     clean = _chunk("Prozë krejt e pastër.", order=0)
     with_ref = _chunk("Vijazimi.\nKjo qe e dhëna.<ref name=\"RefA\"/>\n", order=1)
     orphaned_ref_html = (
-        '<span class="error mw-ext-cite-error">Gabim citimi: Referencë e emërtuar '
-        '&lt;ref name="RefA"/&gt; u thirr por nuk u përcaktua kurrë</span>'
+        '<span class="error mw-ext-cite-error">Gabim citimi: Etiketë &lt;ref&gt; e '
+        'pavlefshme;\nasnjë tekst nuk u dha për refs e quajtura "RefA"</span>'
     )
     mw_client = FakeMediaWikiClient(
         responses=[
@@ -322,8 +340,8 @@ async def test_unlocalized_ref_issue_targets_only_first_matching_chunk():
     first = _chunk("Seksioni A.<ref name=\"RefA\"/>\n", order=1)
     second = _chunk("Seksioni B.<ref name=\"RefA\"/>\n", order=2)
     orphaned_ref_html = (
-        '<span class="error mw-ext-cite-error">Gabim citimi: Referencë e emërtuar '
-        '&lt;ref name="RefA"/&gt; u thirr por nuk u përcaktua kurrë</span>'
+        '<span class="error mw-ext-cite-error">Gabim citimi: Etiketë &lt;ref&gt; e '
+        'pavlefshme;\nasnjë tekst nuk u dha për refs e quajtura "RefA"</span>'
     )
     mw_client = FakeMediaWikiClient(
         responses=[

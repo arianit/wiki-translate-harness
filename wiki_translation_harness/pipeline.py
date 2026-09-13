@@ -79,18 +79,32 @@ def _chunk_for_line(spans: list[tuple[Chunk, int, int]], line_number: int | None
     return None
 
 
-# MediaWiki's Cite extension renders its error messages with the offending
-# ref's tag HTML-escaped inside the message text (e.g. "&lt;ref name="X"/&gt;").
-# `name="X"` survives that escaping, which is what lets a live-parse finding
-# with no wikitext-line mapping be pinned back to the ref(s) it's about.
-_REF_NAME_IN_MESSAGE_RE = re.compile(r"name\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+# MediaWiki's Cite extension doesn't echo the offending <ref name="X"> tag
+# syntax into its (localized) error text — confirmed against real sqwiki
+# output (see tests/test_live_validator.py): an orphaned ref reads "...asnjë
+# tekst nuk u dha për refs e quajtura "x"" and English's own
+# cite_error_references_duplicate_key reads 'name "$1" defined multiple
+# times...' — in both, the ref name is simply quoted, with no "name="
+# prefix and no consistent surrounding wording across languages/error
+# kinds. The one thing that does hold: it's the only quoted text in the
+# message. So match any quoted span rather than a literal "name=".
+_REF_NAME_IN_MESSAGE_RE = re.compile(r"[\"'‘’“”]([^\"'‘’“”]+)[\"'‘’“”]")
+
+# Only these live-validator kinds are Cite-extension ref errors whose
+# message names the offending ref; extracting quoted spans from anything
+# else (e.g. unexpanded_template's `Template 'X' does not exist`, which is
+# also quoted) would misroute unrelated findings onto a coincidentally
+# matching chunk.
+_REF_NAMED_ISSUE_KINDS = frozenset({"orphaned_named_ref", "cite_error"})
 
 
-def _ref_names_in_message(message: str) -> list[str]:
+def _ref_names_in_message(issue: ValidationIssue) -> list[str]:
     """Ref names named by a cite error message (an orphaned named ref, a
-    ref "defined multiple times", ...) — empty list when the message doesn't
-    name one."""
-    return [m.group(1) for m in _REF_NAME_IN_MESSAGE_RE.finditer(message)]
+    ref "defined multiple times", ...) — empty list when the issue isn't a
+    Cite ref error or its message doesn't name one."""
+    if issue.kind not in _REF_NAMED_ISSUE_KINDS:
+        return []
+    return [m.group(1) for m in _REF_NAME_IN_MESSAGE_RE.finditer(issue.message)]
 
 
 def _chunk_mentions_ref(chunk: Chunk, ref_name: str) -> bool:
@@ -295,7 +309,7 @@ async def run_assembly_repair(
         targeted_unlocalized: dict[int, list[str]] = {}
         broadcast_unlocalized: list[str] = []
         for issue, text_line in unlocalized:
-            ref_names = _ref_names_in_message(issue.message)
+            ref_names = _ref_names_in_message(issue)
             target = next(
                 (
                     c
