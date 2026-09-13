@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from wiki_translation_harness.config import build_config
+from wiki_translation_harness.models import Config
 
 _CONTACT = {"wikimedia_contact": "test@example.com"}
 
@@ -41,6 +42,24 @@ def test_explicit_model_survives_provider_switch(monkeypatch):
 def test_invalid_provider_rejected():
     with pytest.raises(ValueError, match="provider must be"):
         build_config(None, {**_CONTACT, "provider": "bogus"})
+
+
+def test_missing_experiential_api_key_raises(monkeypatch):
+    monkeypatch.delenv("EXPLABS_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="No Experiential Labs API key"):
+        build_config(None, {**_CONTACT, "provider": "experiential"})
+
+
+def test_experiential_env_var_supplies_api_key(monkeypatch):
+    monkeypatch.setenv("EXPLABS_API_KEY", "xpl_test")
+    cfg = build_config(None, {**_CONTACT, "provider": "experiential"})
+    assert cfg.experiential_api_key == "xpl_test"
+
+
+def test_switching_to_experiential_without_model_gets_experiential_default(monkeypatch):
+    monkeypatch.setenv("EXPLABS_API_KEY", "xpl_test")
+    cfg = build_config(None, {**_CONTACT, "provider": "experiential"})
+    assert cfg.model == "qwen3.8-27b"
 
 
 def test_cli_provider_switch_drops_stale_yaml_model(tmp_path: Path, monkeypatch):
@@ -127,3 +146,23 @@ def test_explicit_user_agent_bypasses_contact_requirement(monkeypatch):
     monkeypatch.delenv("WIKIMEDIA_CONTACT", raising=False)
     cfg = build_config(None, {"user_agent": "custom-ua/1.0 (custom@example.com)"})
     assert cfg.user_agent == "custom-ua/1.0 (custom@example.com)"
+
+
+def test_fallback_provider_round_trips():
+    # Regression test: fallback_provider was read everywhere (cli.py,
+    # pipeline.py's ensure_fallback_engine) via config.fallback_provider but
+    # was never declared as a Config field, so pydantic silently dropped it
+    # and any real credit-exhaustion mid-run would have crashed with
+    # AttributeError the first time the fallback switch actually fired.
+    cfg = Config.model_validate({**_CONTACT, "fallback_provider": "claude_code"})
+    assert cfg.fallback_provider == "claude_code"
+
+
+def test_fallback_provider_defaults_to_none():
+    cfg = Config.model_validate({**_CONTACT})
+    assert cfg.fallback_provider is None
+
+
+def test_invalid_fallback_provider_rejected():
+    with pytest.raises(ValueError, match="fallback_provider must be"):
+        Config.model_validate({**_CONTACT, "fallback_provider": "bogus"})

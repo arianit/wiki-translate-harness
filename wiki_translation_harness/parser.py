@@ -218,6 +218,58 @@ def _split_oversized_section(text: str, chunk_min: int, chunk_max: int) -> list[
     return chunks if chunks else [text]
 
 
+_INFOBOX_RE = re.compile(r"\{\{\s*[Ii]nfobox")
+_TABLE_ROW_RE = re.compile(r"\|-")
+_REF_RE = re.compile(r"<ref", re.IGNORECASE)
+_TEMPLATE_RE = re.compile(r"\{\{")
+_NAVBOX_RE = re.compile(r"\{\{\s*[Nn]avbox")
+
+# Thresholds for classifying a chunk as complex
+_COMPLEX_MIN_TABLE_ROWS = 5  # tables with 5+ rows
+_COMPLEX_REF_DENSITY = 15  # refs per 1000 tokens
+_COMPLEX_TEMPLATE_DENSITY = 30  # templates per 1000 tokens
+
+
+def classify_chunk_complexity(text: str) -> bool:
+    """Heuristic classifier for chunk complexity.
+
+    Returns True for chunks containing markup structures where
+    structural integrity matters most: Infoboxes, large tables,
+    dense reference lists, navboxes/sidebars, and template-heavy
+    sections. Routed to ``complex_model`` when configured.
+    """
+    # 1. Infobox — the single most markup-critical structure
+    if _INFOBOX_RE.search(text):
+        return True
+
+    # 2. Navboxes / sidebars — complex nested templates
+    if _NAVBOX_RE.search(text):
+        return True
+
+    total_tokens = estimate_tokens(text)
+    if total_tokens == 0:
+        return False
+
+    tokens_k = total_tokens / 1000.0
+
+    # 3. Tables with many rows
+    table_rows = len(_TABLE_ROW_RE.findall(text))
+    if table_rows >= _COMPLEX_MIN_TABLE_ROWS:
+        return True
+
+    # 4. Dense reference lists
+    ref_count = len(_REF_RE.findall(text))
+    if tokens_k > 0 and ref_count / tokens_k > _COMPLEX_REF_DENSITY:
+        return True
+
+    # 5. Template-heavy content
+    template_count = len(_TEMPLATE_RE.findall(text))
+    if tokens_k > 0 and template_count / tokens_k > _COMPLEX_TEMPLATE_DENSITY:
+        return True
+
+    return False
+
+
 def build_chunks(
     article_title: str,
     sections: list[Section],
@@ -250,6 +302,7 @@ def build_chunks(
                 text=combined_text,
                 token_estimate=estimate_tokens(combined_text),
                 source_lang=source_lang,
+                is_complex=classify_chunk_complexity(combined_text),
             )
         )
         order += 1
@@ -270,6 +323,7 @@ def build_chunks(
                         text=sub_text,
                         token_estimate=estimate_tokens(sub_text),
                         source_lang=source_lang,
+                        is_complex=classify_chunk_complexity(sub_text),
                     )
                 )
                 order += 1

@@ -13,7 +13,22 @@ from wiki_translation_harness.models import Config
 
 _ENV_API_KEY = "OPENROUTER_API_KEY"
 _ENV_LOCAL_API_KEY = "LOCAL_API_KEY"
+_ENV_EXPERIENTIAL_API_KEY = "EXPLABS_API_KEY"
 _ENV_WIKIMEDIA_CONTACT = "WIKIMEDIA_CONTACT"
+
+
+def default_model_for_provider(provider: str) -> str:
+    """Same provider-appropriate default build_config() picks when nothing
+    else sets `model` — factored out so a mid-run fallback-provider switch
+    (pipeline.py) can pick a sane model for the new provider too."""
+    if provider == "claude_code":
+        return "claude-sonnet-5"
+    if provider == "experiential":
+        # Matches Experiential Labs' own curated-catalog example model id
+        # (platform.experientiallabs.ai/docs) rather than assuming its
+        # catalog carries OpenRouter's deepseek/deepseek-v3.2 slug.
+        return "qwen3.8-27b"
+    return "deepseek/deepseek-v3.2"
 
 
 def load_yaml_config(path: Path | None) -> dict[str, Any]:
@@ -42,6 +57,10 @@ def build_config(
     if local_api_key:
         data["local_api_key"] = local_api_key
 
+    experiential_api_key = os.environ.get(_ENV_EXPERIENTIAL_API_KEY)
+    if experiential_api_key:
+        data["experiential_api_key"] = experiential_api_key
+
     contact_env = os.environ.get(_ENV_WIKIMEDIA_CONTACT)
     if contact_env:
         data["wikimedia_contact"] = contact_env
@@ -66,8 +85,7 @@ def build_config(
     # config.yaml, or via --model, or above) -- same reasoning as above,
     # just covering the case where config.yaml never had a model at all.
     if "model" not in data:
-        provider = data.get("provider", "claude_code")
-        data["model"] = "claude-sonnet-5" if provider == "claude_code" else "deepseek/deepseek-v3.2"
+        data["model"] = default_model_for_provider(data.get("provider", "claude_code"))
 
     config = Config.model_validate(data)
 
@@ -75,6 +93,12 @@ def build_config(
         raise ValueError(
             f"No OpenRouter API key configured. Set the {_ENV_API_KEY} environment "
             "variable or 'openrouter_api_key' in config.yaml."
+        )
+
+    if config.provider == "experiential" and not config.experiential_api_key:
+        raise ValueError(
+            f"No Experiential Labs API key configured. Set the {_ENV_EXPERIENTIAL_API_KEY} "
+            "environment variable or 'experiential_api_key' in config.yaml."
         )
 
     if not config.user_agent:
@@ -100,5 +124,11 @@ def resolve_llm_endpoint(config: Config) -> tuple[str, str, str]:
             config.local_base_url,
             config.local_api_key or "local",
             config.local_model or config.model,
+        )
+    if config.provider == "experiential":
+        return (
+            config.experiential_base_url,
+            config.experiential_api_key,
+            config.experiential_model or config.model,
         )
     return config.openrouter_base_url, config.openrouter_api_key, config.model

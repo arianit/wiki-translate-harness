@@ -87,6 +87,27 @@ class ProgressReporter:
         if self._live is not None:
             self._live.update(self._render())
 
+    @property
+    def is_live(self) -> bool:
+        """True only for an interactive run with the Rich table actually
+        rendering (cli.py's `with ProgressReporter(...)`) -- queue_runner.py
+        constructs one without entering it as a context manager so its
+        on_event=logger.info sink is used instead, which leaves _live None.
+        pipeline.py uses this to decide whether a mid-run provider-fallback
+        prompt can safely use console.input() (Live active) or must instead
+        proceed non-interactively (unattended/logged only)."""
+        return self._live is not None
+
+    def pause(self) -> None:
+        """Stop live rendering so a synchronous console.input() prompt
+        doesn't fight the table's own periodic redraw. No-op if not live."""
+        if self._live is not None:
+            self._live.stop()
+
+    def resume(self) -> None:
+        if self._live is not None:
+            self._live.start()
+
     # --- event hooks called by pipeline.py ---
 
     def set_plan(self, total_articles: int, total_chunks: int, estimated_cost_usd: float) -> None:

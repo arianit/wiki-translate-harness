@@ -1,17 +1,29 @@
 # Copy to config.yaml and adjust. CLI flags override anything set here.
 # OPENROUTER_API_KEY env var overrides openrouter_api_key set here.
 # LOCAL_API_KEY env var overrides local_api_key set here.
+# EXPLABS_API_KEY env var overrides experiential_api_key set here.
 
 # provider: claude_code (default — runs `claude -p` under your existing
 # Claude Code CLI login/subscription, no API key needed), openrouter
-# (cloud), or local (any OpenAI-compatible server: llama.cpp server, Ollama,
-# LM Studio, vLLM, ...). Override per run with `--provider openrouter` /
-# `--provider local`; --model and --workers work the same across all three.
-# If you switch provider without also setting model below, config.py picks
-# a provider-appropriate default (claude-sonnet-5 for claude_code,
-# deepseek/deepseek-v3.2 otherwise) rather than silently reusing whatever
-# model id you had for the other provider.
+# (cloud), local (any OpenAI-compatible server: llama.cpp server, Ollama,
+# LM Studio, vLLM, ...), or experiential (platform.experientiallabs.ai, a
+# curated multi-model gateway on the same OpenAI wire protocol as
+# OpenRouter). Override per run with `--provider openrouter` / `--provider
+# local` / `--provider experiential`; --model and --workers work the same
+# across all four. If you switch provider without also setting model below,
+# config.py picks a provider-appropriate default (claude-sonnet-5 for
+# claude_code, qwen3.8-27b for experiential, deepseek/deepseek-v3.2
+# otherwise) rather than silently reusing whatever model id you had for the
+# other provider.
 provider: claude_code
+# If a call to `provider` fails with an insufficient-credits error (e.g.
+# OpenRouter HTTP 402), the harness offers to switch engines mid-run rather
+# than just failing every remaining chunk: interactively confirmed for a
+# manual `--title`/`--titles` run, auto-switched (just logged) for
+# unattended `queue` runs. Defaults to claude_code whenever `provider` isn't
+# already claude_code; set this to pick a different one, or to `provider`'s
+# own value to disable the offer entirely.
+# fallback_provider: claude_code
 # No `model:` here either, for the same reason -- let it auto-derive.
 workers: 4
 sequential: true
@@ -81,6 +93,11 @@ openrouter_base_url: https://openrouter.ai/api/v1
 # local_base_url: http://localhost:8080/v1
 # local_api_key: local
 # local_model: llama-3.1-8b-instruct   # falls back to `model` if unset
+
+# Used only when provider: experiential (platform.experientiallabs.ai).
+# experiential_api_key: xpl_...   # prefer the EXPLABS_API_KEY env var instead
+# experiential_base_url: https://api.experientiallabs.ai/v1
+# experiential_model: qwen3.8-27b   # falls back to `model` if unset
 
 # Used only when provider: claude_code. claude_code_cli_path is the `claude`
 # binary to invoke (override if it's not on PATH); claude_code_permission_mode

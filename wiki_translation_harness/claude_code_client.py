@@ -337,9 +337,13 @@ class ClaudeCodeClient:
         messages: list[dict[str, str]],
         temperature: float = 0.0,
         on_retry: RetryCallback | None = None,
+        usage_out: dict | None = None,
     ) -> tuple[str, int, int]:
         """Returns (text, prompt_tokens, completion_tokens). temperature is
         ignored — the CLI has no equivalent sampling-temperature flag.
+        usage_out is accepted for interface parity with OpenRouterClient
+        (see engines.LLMEngineClient) but left unfilled -- the CLI has no
+        provider-reported inline cost to surface through it.
 
         messages is always exactly [{"role":"system",...},{"role":"user",...}]
         — the fixed shape skill_loader.build_translation_messages/

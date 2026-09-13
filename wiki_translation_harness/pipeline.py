@@ -15,6 +15,7 @@ import time
 import httpx
 
 from wiki_translation_harness.cache import TranslationCache, VerificationCache, compute_key
+from wiki_translation_harness.config import default_model_for_provider
 from wiki_translation_harness.engines import LLMEngineClient, build_llm_client
 from wiki_translation_harness.citation_language import (
     dedupe_short_footnotes,
@@ -31,6 +32,7 @@ from wiki_translation_harness.models import (
     ChunkStatus,
     Config,
     EngineError,
+    InsufficientCreditsError,
     ModelPricing,
     RunStats,
     ValidationIssue,
@@ -389,6 +391,10 @@ async def run_pipeline(
 
     try:
         pricing = await llm_client.get_pricing_for(config.model)
+        complex_pricing = (
+            await llm_client.get_pricing_for(config.complex_model)
+            if config.complex_model else None
+        )
 
         pending_items: list[ArticleInput] = []
         for item in inputs:
@@ -441,6 +447,92 @@ async def run_pipeline(
             if reporter is not None:
                 reporter.on_retry(config.model, attempt, reason, delay)
 
+        # Guards the one-time provider switch below: several workers can hit
+        # InsufficientCreditsError for the same exhausted account at once,
+        # but only the first should prompt/log and actually swap the client
+        # — the rest just wait for that swap and retry against it too.
+        fallback_lock = asyncio.Lock()
+        fallback_switched = False
+        fallback_declined = False
+
+        async def ensure_fallback_engine() -> bool:
+            """On the first call, offers (or, non-interactively, just makes)
+            a one-way switch from config.provider to config.fallback_provider
+            after a credit-exhaustion failure. Returns True if chunks should
+            now retry against the (possibly already, by another worker)
+            switched engine, False if there's nothing to switch to or the
+            user declined."""
+            nonlocal llm_client, pricing, config, fallback_switched, fallback_declined
+            async with fallback_lock:
+                if fallback_switched:
+                    return True
+                if fallback_declined:
+                    return False
+                target = config.fallback_provider or (
+                    "claude_code" if config.provider != "claude_code" else None
+                )
+                if not target or target == config.provider:
+                    return False
+
+                interactive = reporter is not None and reporter.is_live
+                proceed = True
+                if interactive:
+                    reporter.pause()
+                    try:
+                        # markup=False: the prompt's own `[provider]`/`[Y/n]`
+                        # brackets would otherwise be parsed as (invalid,
+                        # silently-dropped) Rich style tags -- confirmed in
+                        # practice that Console.input() swallows "[openrouter]"
+                        # entirely rather than printing it literally.
+                        answer = await asyncio.to_thread(
+                            reporter.console.input,
+                            f"\n{config.provider} ran out of credits. Switch to "
+                            f"'{target}' and continue this run? [Y/n] ",
+                            markup=False,
+                        )
+                    finally:
+                        reporter.resume()
+                    proceed = answer.strip().lower() not in ("n", "no")
+                else:
+                    # Unattended (e.g. `queue` mode has no Live table attached
+                    # — see ProgressReporter.is_live): can't block on stdin,
+                    # so switch automatically and just log it.
+                    logger.warning(
+                        "Provider %r ran out of credits; auto-switching to fallback "
+                        "provider %r for the rest of this run (non-interactive).",
+                        config.provider, target,
+                    )
+
+                if not proceed:
+                    fallback_declined = True
+                    return False
+
+                new_config = config.model_copy(
+                    update={"provider": target, "model": default_model_for_provider(target)}
+                )
+                new_client, effective_model = build_llm_client(new_config)
+                if effective_model != new_config.model:
+                    new_config = new_config.model_copy(update={"model": effective_model})
+                new_pricing = await new_client.get_pricing_for(new_config.model)
+
+                # Deliberately not closing the old client here: another
+                # worker could still have an in-flight call against it right
+                # up to this point (it only reaches this lock *after*
+                # raising InsufficientCreditsError, not before starting the
+                # call), and aclose()'ing out from under a live request is
+                # worse than leaking one now-unreferenced client for the
+                # rest of the process.
+                llm_client, pricing, config = new_client, new_pricing, new_config
+                fallback_switched = True
+
+                logger.warning(
+                    "Switched engine to provider=%r model=%r after credit exhaustion.",
+                    target, new_config.model,
+                )
+                if reporter is not None and reporter.on_event is not None:
+                    reporter.on_event(f"switched provider to {target!r} after credit exhaustion")
+                return True
+
         async def process_article(source: ArticleSource, chunks: list[Chunk], facts: VerifiedFacts) -> None:
             article_stats = {
                 'input_tokens': 0,
@@ -456,26 +548,36 @@ async def run_pipeline(
                 try:
                     if reporter is not None:
                         reporter.on_chunk_start(slot_id, chunk.article_title, chunk.section_title)
-                    try:
-                        outcome = await translate_chunk(
-                            chunk,
-                            config,
-                            llm_client,
-                            skill,
-                            cache,
-                            pricing,
-                            stats,
-                            on_retry=on_retry,
-                            verified_facts=facts,
-                            qa_skill=qa_skill,
-                        )
-                    except EngineError as exc:
-                        chunk.status = ChunkStatus.FAILED
-                        logger.error(
-                            "Engine call failed for %s chunk %d: %s", chunk.article_title, chunk.order, exc
-                        )
-                        article_stats['failed'] = True
-                        return
+                    outcome = None
+                    for engine_attempt in range(2):  # 1 retry, only after a fallback-provider switch
+                        try:
+                            outcome = await translate_chunk(
+                                chunk,
+                                config,
+                                llm_client,
+                                skill,
+                                cache,
+                                pricing,
+                                stats,
+                                on_retry=on_retry,
+                                verified_facts=facts,
+                                qa_skill=qa_skill,
+                                complex_pricing=complex_pricing,
+                            )
+                            break
+                        except EngineError as exc:
+                            if (
+                                engine_attempt == 0
+                                and isinstance(exc, InsufficientCreditsError)
+                                and await ensure_fallback_engine()
+                            ):
+                                continue
+                            chunk.status = ChunkStatus.FAILED
+                            logger.error(
+                                "Engine call failed for %s chunk %d: %s", chunk.article_title, chunk.order, exc
+                            )
+                            article_stats['failed'] = True
+                            return
                     if not outcome.validation.valid:
                         logger.error(
                             "Validation failed for %s chunk %d after repair attempts: %s",

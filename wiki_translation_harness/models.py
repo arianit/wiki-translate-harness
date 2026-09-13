@@ -13,6 +13,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Shared between Config.provider and Config.fallback_provider's validators
+# so the two lists of accepted engine names can't drift apart.
+_VALID_PROVIDERS = ("openrouter", "local", "claude_code", "experiential")
+
 
 class ArticleStatus(str, Enum):
     PENDING = "pending"
@@ -58,6 +62,7 @@ class Chunk(BaseModel):
     source_lang: str = "en"
     status: ChunkStatus = ChunkStatus.PENDING
     translated_text: str | None = None
+    is_complex: bool = False
 
     @property
     def section_title(self) -> str:
@@ -107,6 +112,14 @@ class EngineError(Exception):
     places that catch this to gracefully fail one chunk/article instead of
     crashing the whole run (pipeline.py, benchmark.py) shouldn't need a new
     except clause every time a new engine is added."""
+
+
+class InsufficientCreditsError(EngineError):
+    """The configured engine refused a call for lack of funds (e.g.
+    OpenRouter's HTTP 402) rather than any transient/retryable reason.
+    Retrying the same engine won't help — pipeline.py catches this
+    specifically to offer a switch to config.fallback_provider instead of
+    just failing the chunk like a generic EngineError."""
 
 
 class TranslationResult(BaseModel):
@@ -178,9 +191,24 @@ class Config(BaseModel):
     """Full harness configuration: config.yaml merged with CLI overrides."""
 
     # "claude_code" (default, uses the caller's existing Claude Code CLI
-    # login — no API key), "openrouter", or "local". See engines.py.
+    # login — no API key), "openrouter", "local", or "experiential" (the
+    # Experiential Labs gateway, platform.experientiallabs.ai — an
+    # OpenAI-compatible multi-model gateway, reuses OpenRouterClient). See
+    # engines.py.
     provider: str = "claude_code"
+    # Engine to switch to (mid-run, one-way) if `provider` raises
+    # InsufficientCreditsError -- interactively confirmed for a manual run,
+    # auto-switched (just logged) under `queue`. None lets pipeline.py apply
+    # its own default (claude_code whenever `provider` isn't already
+    # claude_code); set equal to `provider` to disable the offer entirely.
+    # See pipeline.py's ensure_fallback_engine().
+    fallback_provider: str | None = None
     model: str = "claude-sonnet-5"
+    # When set, complex chunks (Infoboxes, large tables, dense ref lists)
+    # are routed to this model instead of `model` — a hybrid strategy that
+    # uses a cheaper/faster model for ~80% of standard body text while
+    # reserving the stronger model for markup-critical sections.
+    complex_model: str | None = None
     workers: int = 4
     # Process articles one at a time (still using up to `workers` concurrent
     # chunk translations within each article) instead of starting every
@@ -338,6 +366,16 @@ class Config(BaseModel):
     # Falls back to `model` when unset, so --model keeps working for local too.
     local_model: str | None = None
 
+    # Experiential Labs (platform.experientiallabs.ai) -- a curated
+    # multi-model gateway speaking the same OpenAI wire protocol as
+    # OpenRouter (POST /v1/chat/completions, Bearer auth), selected via
+    # provider: experiential. See resolve_llm_endpoint() and
+    # openrouter.py's provider-aware insufficient-quota/cost handling.
+    experiential_api_key: str | None = None
+    experiential_base_url: str = "https://api.experientiallabs.ai/v1"
+    # Falls back to `model` when unset, same pattern as local_model.
+    experiential_model: str | None = None
+
     # Claude Code CLI engine (provider: claude_code, the default) — runs
     # `claude -p` under the caller's existing Claude Code subscription/login,
     # no API key needed. See claude_code_client.py.
@@ -366,8 +404,19 @@ class Config(BaseModel):
     @field_validator("provider")
     @classmethod
     def _validate_provider(cls, v: str) -> str:
-        if v not in ("openrouter", "local", "claude_code"):
-            raise ValueError(f"provider must be 'openrouter', 'local', or 'claude_code', got {v!r}")
+        if v not in _VALID_PROVIDERS:
+            raise ValueError(
+                f"provider must be 'openrouter', 'local', 'claude_code', or 'experiential', got {v!r}"
+            )
+        return v
+
+    @field_validator("fallback_provider")
+    @classmethod
+    def _validate_fallback_provider(cls, v: str | None) -> str | None:
+        if v is not None and v not in _VALID_PROVIDERS:
+            raise ValueError(
+                f"fallback_provider must be 'openrouter', 'local', 'claude_code', or 'experiential', got {v!r}"
+            )
         return v
 
     @field_validator(

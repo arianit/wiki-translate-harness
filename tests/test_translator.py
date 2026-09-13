@@ -14,7 +14,7 @@ class FakeOpenRouterClient:
         self.responses = list(responses)
         self.calls: list[list[dict]] = []
 
-    async def chat_completion(self, model, messages, temperature=0.0, on_retry=None):
+    async def chat_completion(self, model, messages, temperature=0.0, on_retry=None, usage_out=None):
         self.calls.append(messages)
         text = self.responses.pop(0)
         return text, 100, 50
