@@ -48,12 +48,16 @@ async def translate_chunk(
     on_retry: RetryCallback | None = None,
     verified_facts: VerifiedFacts | None = None,
     qa_skill: SkillContent | None = None,
+    complex_pricing: ModelPricing | None = None,
 ) -> ChunkOutcome:
+    # Hybrid-model routing: complex chunks use complex_model when configured
+    effective_model = config.complex_model if (config.complex_model and chunk.is_complex) else config.model
+    effective_pricing = complex_pricing if (config.complex_model and chunk.is_complex) else pricing
     facts_block = build_verified_facts_block(chunk.text, verified_facts) if verified_facts else ""
     facts_hash = hashlib.sha256(facts_block.encode("utf-8")).hexdigest()[:16] if facts_block else ""
 
     key = compute_key(
-        config.model, chunk.source_lang, config.target_lang, chunk.text, skill.content_hash, facts_hash
+        effective_model, chunk.source_lang, config.target_lang, chunk.text, skill.content_hash, facts_hash
     )
 
     cached_text = cache.get(key) if cache is not None else None
@@ -77,7 +81,7 @@ async def translate_chunk(
         chunk.text,
         verified_facts_block=facts_block,
     )
-    result = await run_completion(client, config.model, messages, config.temperature, pricing, on_retry=on_retry)
+    result = await run_completion(client, effective_model, messages, config.temperature, effective_pricing, on_retry=on_retry)
     _accumulate(stats, result)
     total_prompt_tokens = result.prompt_tokens
     total_completion_tokens = result.completion_tokens
@@ -96,7 +100,7 @@ async def translate_chunk(
             repair_result = await repair_chunk(
                 client,
                 skill,
-                config.model,
+                effective_model,
                 config.temperature,
                 chunk.source_lang,
                 config.target_lang,
@@ -104,7 +108,7 @@ async def translate_chunk(
                 chunk.section_title,
                 translated_text,
                 errors,
-                pricing,
+                effective_pricing,
                 on_retry=on_retry,
                 qa_skill=qa_skill,
             )
@@ -138,7 +142,7 @@ async def translate_chunk(
         verified_facts.record_established_renderings(translated_text)
 
     if cache is not None and chunk.status != ChunkStatus.FAILED:
-        cache.set(key, config.model, chunk.source_lang, config.target_lang, chunk.text, translated_text)
+        cache.set(key, effective_model, chunk.source_lang, config.target_lang, chunk.text, translated_text)
 
     stats.sections_translated += 1
 

@@ -14,7 +14,12 @@ from typing import Callable
 
 import httpx
 
-from wiki_translation_harness.models import EngineError, ModelPricing, TranslationResult
+from wiki_translation_harness.models import (
+    EngineError,
+    InsufficientCreditsError,
+    ModelPricing,
+    TranslationResult,
+)
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
@@ -97,20 +102,32 @@ class OpenRouterClient:
         messages: list[dict[str, str]],
         temperature: float = 0.0,
         on_retry: RetryCallback | None = None,
+        usage_out: dict | None = None,
     ) -> tuple[str, int, int]:
-        """Returns (text, prompt_tokens, completion_tokens)."""
+        """Returns (text, prompt_tokens, completion_tokens).
+
+        usage_out, when passed, is filled in-place with the response's raw
+        `usage` object -- a fresh dict per call (never shared/mutated
+        concurrently), so run_completion() can read provider-reported fields
+        (e.g. Experiential Labs' inline `usage.cost`) without widening this
+        method's return type for every engine (see engines.LLMEngineClient).
+        """
         attempt = 0
+        payload: dict[str, object] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if self.provider == "experiential":
+            # OpenAI-standard attribution field (Experiential Labs' Cost API
+            # docs: "Pass the OpenAI-standard `safety_identifier` on every
+            # request") -- a body field, not a header, unlike OpenRouter's
+            # HTTP-Referer/X-Title above.
+            payload["safety_identifier"] = "wiki-translation-harness"
         while True:
             try:
                 resp = await asyncio.wait_for(
-                    self._client.post(
-                        "/chat/completions",
-                        json={
-                            "model": model,
-                            "messages": messages,
-                            "temperature": temperature,
-                        },
-                    ),
+                    self._client.post("/chat/completions", json=payload),
                     timeout=self._hard_timeout,
                 )
             except (httpx.TransportError, asyncio.TimeoutError) as exc:
@@ -123,6 +140,11 @@ class OpenRouterClient:
                 await self._backoff(attempt, on_retry, reason=f"connection error: {exc}")
                 continue
 
+            if resp.status_code == 429:
+                quota_error = self._insufficient_quota_error(resp)
+                if quota_error is not None:
+                    raise quota_error
+
             if resp.status_code in RETRYABLE_STATUS_CODES:
                 attempt += 1
                 if attempt > self.max_retries:
@@ -132,6 +154,17 @@ class OpenRouterClient:
                     )
                 await self._backoff(attempt, on_retry, reason=f"HTTP {resp.status_code}")
                 continue
+
+            if resp.status_code == 402:
+                # Payment Required -- out of (or insufficient) account
+                # balance for this request. Not in RETRYABLE_STATUS_CODES on
+                # purpose: retrying the same engine can't help, unlike a
+                # transient 429/5xx. A distinct exception type so pipeline.py
+                # can offer a fallback-provider switch instead of just
+                # failing the chunk like any other EngineError.
+                raise InsufficientCreditsError(
+                    f"OpenRouter request failed: HTTP 402 (insufficient credits): {resp.text[:500]}"
+                )
 
             if resp.status_code >= 400:
                 raise OpenRouterError(
@@ -161,9 +194,35 @@ class OpenRouterClient:
             raise OpenRouterError(f"OpenRouter response had no choices: {data}")
         text = choices[0]["message"]["content"]
         usage = data.get("usage") or {}
+        if usage_out is not None:
+            usage_out.update(usage)
         prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
         completion_tokens = int(usage.get("completion_tokens", 0) or 0)
         return text, prompt_tokens, completion_tokens
+
+    def _insufficient_quota_error(self, resp: httpx.Response) -> InsufficientCreditsError | None:
+        """HTTP 429 is ambiguous across providers: OpenRouter uses it purely
+        for transient rate limiting (retryable, see RETRYABLE_STATUS_CODES),
+        while Experiential Labs also uses it for a genuine "out of
+        credits/quota" condition -- distinguished only by the JSON error
+        body's stable `code` field (docs explicitly warn the `message` text
+        isn't stable), never by status code alone. Parsed generically here
+        (not gated on self.provider) since a body that doesn't match this
+        shape just falls through to the existing retryable-429 path either
+        way -- OpenRouter's own 429s have never been observed to carry this
+        envelope."""
+        try:
+            body = resp.json()
+        except json.JSONDecodeError:
+            return None
+        error = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(error, dict):
+            return None
+        if error.get("code") != "insufficient_quota":
+            return None
+        return InsufficientCreditsError(
+            f"{self.provider} request failed: HTTP 429 (code=insufficient_quota): {resp.text[:500]}"
+        )
 
     async def _backoff(
         self, attempt: int, on_retry: RetryCallback | None, reason: str
@@ -177,6 +236,13 @@ class OpenRouterClient:
         if self.provider != "openrouter":
             # Local servers have no meaningful pricing endpoint; local
             # inference is treated as free (cost always reports as 0.0).
+            # Experiential Labs is also skipped here (unconfirmed whether
+            # its /v1/models exposes OpenRouter's per-entry `pricing` shape)
+            # -- it reports real per-call cost via chat_completion's
+            # usage_out instead, read directly off each response's inline
+            # `usage.cost` in run_completion() below, so a $0 pricing table
+            # doesn't matter for it the way it would for a truly free local
+            # engine.
             return {}
         if self._pricing_cache is not None:
             return self._pricing_cache
@@ -227,11 +293,21 @@ async def run_completion(
 ) -> TranslationResult:
     """Shared call+timing+cost path used by both translate and repair invocations."""
     start = time.monotonic()
+    usage: dict = {}
     text, prompt_tokens, completion_tokens = await client.chat_completion(
-        model, messages, temperature=temperature, on_retry=on_retry
+        model, messages, temperature=temperature, on_retry=on_retry, usage_out=usage
     )
     latency = time.monotonic() - start
-    cost = compute_cost(pricing, prompt_tokens, completion_tokens)
+    # Prefer a provider-reported settled cost (Experiential Labs stamps
+    # `usage.cost` on every response) over the external per-token pricing
+    # table -- OpenRouter/local responses never carry this key, so `cost`
+    # stays None for them and compute_cost's table-based estimate applies
+    # exactly as before.
+    reported_cost = usage.get("cost")
+    if reported_cost is not None:
+        cost = float(reported_cost)
+    else:
+        cost = compute_cost(pricing, prompt_tokens, completion_tokens)
     return TranslationResult(
         text=text.strip(),
         model=model,

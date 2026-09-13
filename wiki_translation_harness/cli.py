@@ -33,19 +33,22 @@ console = Console()
 
 def _build_overrides(
     model: Optional[str],
-    workers: Optional[int],
-    temperature: Optional[float],
-    max_retries: Optional[int],
-    cache: Optional[bool],
-    validate: Optional[bool],
-    repair: Optional[bool],
+    complex_model: Optional[str] = None,
+    workers: Optional[int] = None,
+    temperature: Optional[float] = None,
+    max_retries: Optional[int] = None,
+    cache: Optional[bool] = None,
+    validate: Optional[bool] = None,
+    repair: Optional[bool] = None,
     live_validate: Optional[bool] = None,
     provider: Optional[str] = None,
+    fallback_provider: Optional[str] = None,
     base_url: Optional[str] = None,
     sequential: Optional[bool] = None,
 ) -> dict:
     overrides = {
         "model": model,
+        "complex_model": complex_model,
         "workers": workers,
         "temperature": temperature,
         "max_retries": max_retries,
@@ -54,13 +57,17 @@ def _build_overrides(
         "repair": repair,
         "live_validate": live_validate,
         "provider": provider,
+        "fallback_provider": fallback_provider,
         "sequential": sequential,
     }
     overrides = {k: v for k, v in overrides.items() if v is not None}
     if base_url is not None:
         # Applies to whichever provider ends up active for this run.
         effective_provider = provider or "openrouter"
-        key = "local_base_url" if effective_provider == "local" else "openrouter_base_url"
+        key = {
+            "local": "local_base_url",
+            "experiential": "experiential_base_url",
+        }.get(effective_provider, "openrouter_base_url")
         overrides[key] = base_url
     return overrides
 
@@ -82,10 +89,23 @@ def main(
     model: Optional[str] = typer.Option(
         None, "--model", help="Model id, e.g. deepseek/deepseek-v3.2 (OpenRouter) or a local model name"
     ),
+    complex_model: Optional[str] = typer.Option(
+        None, "--complex-model",
+        help="When set, complex chunks (Infoboxes, tables, dense refs) are routed to this "
+        "model instead of --model — a hybrid strategy for cost efficiency.",
+    ),
     provider: Optional[str] = typer.Option(
         None, "--provider",
         help="'claude_code' (default, uses your Claude Code CLI login, no API key), "
-        "'openrouter', or 'local' (any OpenAI-compatible server)",
+        "'openrouter', 'local' (any OpenAI-compatible server), or 'experiential' "
+        "(platform.experientiallabs.ai)",
+    ),
+    fallback_provider: Optional[str] = typer.Option(
+        None, "--fallback-provider",
+        help="Engine to switch to if --provider raises an insufficient-credits error "
+        "(e.g. OpenRouter HTTP 402) mid-run -- interactively confirmed here, applied "
+        "automatically (just logged) under `queue`. Defaults to 'claude_code' whenever "
+        "--provider isn't already claude_code.",
     ),
     base_url: Optional[str] = typer.Option(
         None, "--base-url", help="Override the active provider's base URL (pair with --provider local)"
@@ -119,8 +139,19 @@ def main(
         raise typer.Exit(code=1)
 
     overrides = _build_overrides(
-        model, workers, temperature, max_retries, cache, validate, repair, live_validate, provider, base_url,
-        sequential,
+        model=model,
+        complex_model=complex_model,
+        workers=workers,
+        temperature=temperature,
+        max_retries=max_retries,
+        cache=cache,
+        validate=validate,
+        repair=repair,
+        live_validate=live_validate,
+        provider=provider,
+        fallback_provider=fallback_provider,
+        base_url=base_url,
+        sequential=sequential,
     )
     cfg = build_config(config_path, overrides)
 
@@ -269,6 +300,12 @@ def queue(
     ),
     model: Optional[str] = typer.Option(None, "--model"),
     provider: Optional[str] = typer.Option(None, "--provider"),
+    fallback_provider: Optional[str] = typer.Option(
+        None, "--fallback-provider",
+        help="Engine to auto-switch to (logged, not prompted -- queue mode has no "
+        "interactive terminal) if --provider raises an insufficient-credits error. "
+        "Defaults to 'claude_code' whenever --provider isn't already claude_code.",
+    ),
     base_url: Optional[str] = typer.Option(None, "--base-url"),
     workers: Optional[int] = typer.Option(None, "--workers"),
     temperature: Optional[float] = typer.Option(None, "--temperature"),
@@ -286,7 +323,17 @@ def queue(
     from wiki_translation_harness.queue_runner import run_queue_mode  # local import: mirrors main()
 
     overrides = _build_overrides(
-        model, workers, temperature, max_retries, cache, validate, repair, live_validate, provider, base_url
+        model=model,
+        workers=workers,
+        temperature=temperature,
+        max_retries=max_retries,
+        cache=cache,
+        validate=validate,
+        repair=repair,
+        live_validate=live_validate,
+        provider=provider,
+        fallback_provider=fallback_provider,
+        base_url=base_url,
     )
     cfg = build_config(config_path, overrides)
     setup_logging(cfg.log_dir)

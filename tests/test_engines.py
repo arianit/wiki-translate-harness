@@ -28,3 +28,24 @@ def test_local_provider_falls_back_to_local_model():
     )
     assert isinstance(client, OpenRouterClient)
     assert effective_model == "llama-3.1-8b-instruct"
+
+
+def test_experiential_provider_dispatches_to_openrouter_client():
+    client, effective_model = build_llm_client(
+        _config(provider="experiential", model="qwen3.8-27b", experiential_api_key="xpl_test")
+    )
+    assert isinstance(client, OpenRouterClient)
+    assert client.provider == "experiential"
+    assert effective_model == "qwen3.8-27b"
+
+
+def test_experiential_provider_falls_back_to_experiential_model():
+    client, effective_model = build_llm_client(
+        _config(
+            provider="experiential",
+            model="qwen3.8-27b",
+            experiential_api_key="xpl_test",
+            experiential_model="claude-opus-5",
+        )
+    )
+    assert effective_model == "claude-opus-5"

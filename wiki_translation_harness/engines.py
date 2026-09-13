@@ -24,6 +24,7 @@ class LLMEngineClient(Protocol):
         messages: list[dict[str, str]],
         temperature: float = 0.0,
         on_retry: RetryCallback | None = None,
+        usage_out: dict | None = None,
     ) -> tuple[str, int, int]: ...
 
     async def get_pricing_for(self, model: str) -> ModelPricing | None: ...

@@ -2,8 +2,8 @@
 
 Batch harness that translates Wikipedia articles into a target-language wiki
 source (built and tested for English → Albanian sq.wikipedia), via the
-Claude Code CLI by default, OpenRouter, or a local OpenAI-compatible server
-— see **Choosing an engine** below. All translation judgment is delegated
+Claude Code CLI by default, OpenRouter, a local OpenAI-compatible server, or
+Experiential Labs — see **Choosing an engine** below. All translation judgment is delegated
 to the
 [enwiki-sqwiki-translation](https://github.com/arianit/enwiki-sqwiki-translation)
 Pi skill — split across three directories in that repo (translate, `wikiterms`,
@@ -106,9 +106,10 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 cp config.example.yaml config.yaml   # edit model/workers/skill_path as needed
 export WIKIMEDIA_CONTACT=you@example.com   # or set wikimedia_contact in config.yaml
-# Only needed for --provider openrouter (the default, claude_code, uses
-# your existing Claude Code CLI login instead — see "Choosing an engine"):
+# Only needed for --provider openrouter/experiential (the default, claude_code,
+# uses your existing Claude Code CLI login instead — see "Choosing an engine"):
 # export OPENROUTER_API_KEY=sk-or-...
+# export EXPLABS_API_KEY=xpl_...
 ```
 
 `wikimedia_contact` is required — Wikimedia's
@@ -151,9 +152,35 @@ being re-sent to the model. Pass `--force` to re-translate regardless.
 Logs: `logs/run.log` (all activity), `logs/errors.log` (errors only).
 Live counters: `stats.json`, updated after every section.
 
+## Queue mode
+
+**To translate "the next article" rather than a specific title, use the
+shared queue instead of `--title`.** `totranslate.txt` in
+[wiki-translation-queue](https://github.com/arianit/wiki-translation-queue)
+is the shared, cross-machine list of pending articles (one per line, URL or
+title, with a status field this repo's `queue_lib.py` updates in place —
+see that repo's README for the exact format). The `queue` subcommand claims
+and drains it:
+
+```bash
+wiki-translation-harness queue                       # up to 10 articles, defaults from config.yaml
+wiki-translation-harness queue --max-articles 1       # just the next pending line
+wiki-translation-harness queue --provider openrouter --model deepseek/deepseek-v3.2
+```
+
+Each run pulls the queue repo, claims the first line with no status field
+(a `CLAIMED` line older than `--stale-hours`, default 3, is treated as
+abandoned and reclaimed), translates it with the same pipeline `--title`
+uses, then marks the line `DONE` or `FAILED` and pushes. Because the claim
+is committed before translation starts, two machines draining the same
+queue at once don't pick the same article. `--queue-repo-dir` points at a
+local clone of the queue repo (default: see `DEFAULT_QUEUE_REPO_DIR` in
+`queue_runner.py`); add a new article by appending a line to
+`totranslate.txt` in that repo, not by passing `--title`.
+
 ## Choosing an engine
 
-Three `--provider` values, selectable per run with no code change:
+Four `--provider` values, selectable per run with no code change:
 
 - **`claude_code`** (default) — runs `claude -p` under your existing Claude
   Code CLI login/subscription. No API key needed. Cost currently always
@@ -165,6 +192,15 @@ Three `--provider` values, selectable per run with no code change:
   `openrouter_api_key` (or the `OPENROUTER_API_KEY` env var).
 - **`local`** — any local OpenAI-compatible server (llama.cpp server,
   Ollama, LM Studio, vLLM, ...). See below.
+- **`experiential`** — [Experiential
+  Labs](https://platform.experientiallabs.ai/), a curated multi-model
+  gateway speaking the same OpenAI wire protocol as OpenRouter (it reuses
+  `OpenRouterClient`). Requires `experiential_api_key` (or the
+  `EXPLABS_API_KEY` env var). Unlike OpenRouter/local, it reports real
+  per-call cost: `usage.cost` is stamped on every response and read
+  directly, rather than computed from an external pricing table (its
+  pricing endpoint shape, if any, is unconfirmed — see
+  `wiki_translation_harness/openrouter.py`'s `fetch_pricing`).
 
 Switch with `--provider openrouter` / `--provider local`, or set `provider:`
 in `config.yaml`. `--model`/`--workers`/caching/verification/post-processing
@@ -173,12 +209,38 @@ also passing `--model`, `build_config()` picks a provider-appropriate
 default model rather than silently carrying over the other provider's
 model id.
 
-Adding a fourth engine later means adding one branch to
+Adding a further engine later means adding one branch to
 `wiki_translation_harness/engines.py`'s `build_llm_client()` and a new client
 module implementing `chat_completion()`/`get_pricing_for()`/
 `fetch_pricing()`/`aclose()` (see `engines.LLMEngineClient`) — nothing in
 `translator.py`, `repair.py`, `pipeline.py`, or `benchmark.py` needs to
-change, since they only depend on that duck-typed contract.
+change, since they only depend on that duck-typed contract. `experiential`
+took the even smaller path: since it speaks the same OpenAI-compatible wire
+protocol as `openrouter`, it needed no new client module at all, just a
+`resolve_llm_endpoint()`/`build_llm_client()` config branch plus the
+provider-aware insufficient-quota and cost handling described below.
+
+### Fallback on insufficient credits
+
+If the active provider rejects a call for lack of funds the harness offers
+to switch engines mid-run instead of failing every remaining chunk — a
+distinct `InsufficientCreditsError`, not one of the retryable transient
+errors. The condition is detected differently per provider since it's
+signalled differently: OpenRouter uses a plain HTTP 402; Experiential Labs
+instead uses HTTP 429 (otherwise a routine retryable status) with the JSON
+error body's `code` field set to `insufficient_quota` — branching on `code`
+rather than the human-readable `message` text, which Experiential Labs'
+docs explicitly warn isn't stable (see `OpenRouterClient._insufficient_quota_error`
+in `openrouter.py`). For an interactive `--title`/`--titles`/`--category`/
+`--file`/`--directory` run it pauses the live progress table and asks; for
+`queue` mode (no interactive terminal) it switches automatically and just
+logs it. Either way the switch is one-way and sticks for the rest of that
+run.
+
+`--fallback-provider` (or `fallback_provider:` in config.yaml) picks the
+target; unset, it defaults to `claude_code` whenever the active provider
+isn't already `claude_code` (no API credits needed there). Set it to the
+same value as `--provider` to disable the offer entirely.
 
 ## Local models
 
