@@ -1,6 +1,7 @@
 from wiki_translation_harness.claude_code_client import ClaudeCodeClient
 from wiki_translation_harness.engines import build_llm_client
 from wiki_translation_harness.models import Config
+from wiki_translation_harness.opencode_go_client import OpenCodeGoClient
 from wiki_translation_harness.openrouter import OpenRouterClient
 
 
@@ -37,6 +38,12 @@ def test_experiential_provider_dispatches_to_openrouter_client():
     assert isinstance(client, OpenRouterClient)
     assert client.provider == "experiential"
     assert effective_model == "qwen3.8-27b"
+
+
+def test_opencode_go_provider_dispatches_to_opencode_go_client():
+    client, effective_model = build_llm_client(_config(provider="opencode_go", model="auto"))
+    assert isinstance(client, OpenCodeGoClient)
+    assert effective_model == "auto"
 
 
 def test_experiential_provider_falls_back_to_experiential_model():

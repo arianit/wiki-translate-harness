@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Shared between Config.provider and Config.fallback_provider's validators
 # so the two lists of accepted engine names can't drift apart.
-_VALID_PROVIDERS = ("openrouter", "local", "claude_code", "experiential")
+_VALID_PROVIDERS = ("openrouter", "local", "claude_code", "experiential", "opencode_go")
 
 
 class ArticleStatus(str, Enum):
@@ -390,6 +390,19 @@ class Config(BaseModel):
     # headroom above the slowest observed case.
     request_timeout_s: float = 600.0
 
+    # OpenCode Go (github.com/sst/opencode's Go CLI, provider: opencode_go) —
+    # runs `opencode run` under whichever model/provider the caller's own
+    # opencode config already has authenticated, independent of the Claude
+    # Code CLI's own subscription/session. This is what pipeline.py's
+    # ensure_fallback_engine() switches to by default when `provider` is
+    # claude_code and it hits a session/rate limit -- see
+    # claude_code_client.py's ClaudeCodeSessionLimitError and
+    # opencode_go_client.py. No API key needed here either. `model` of
+    # "auto" (config.default_model_for_provider's pick for this provider)
+    # means: don't pass --model at all, let opencode use its own configured
+    # default provider/model.
+    opencode_go_cli_path: str = "opencode"
+
     # Wikimedia's User-Agent policy (foundation.wikimedia.org/wiki/Policy:User-Agent_policy)
     # requires automated requests to self-identify with a contact (email or URL) so the
     # operator can be reached — unidentified bulk traffic risks throttling/blocking.
@@ -406,7 +419,8 @@ class Config(BaseModel):
     def _validate_provider(cls, v: str) -> str:
         if v not in _VALID_PROVIDERS:
             raise ValueError(
-                f"provider must be 'openrouter', 'local', 'claude_code', or 'experiential', got {v!r}"
+                "provider must be 'openrouter', 'local', 'claude_code', 'experiential', "
+                f"or 'opencode_go', got {v!r}"
             )
         return v
 
@@ -415,7 +429,8 @@ class Config(BaseModel):
     def _validate_fallback_provider(cls, v: str | None) -> str | None:
         if v is not None and v not in _VALID_PROVIDERS:
             raise ValueError(
-                f"fallback_provider must be 'openrouter', 'local', 'claude_code', or 'experiential', got {v!r}"
+                "fallback_provider must be 'openrouter', 'local', 'claude_code', "
+                f"'experiential', or 'opencode_go', got {v!r}"
             )
         return v
 

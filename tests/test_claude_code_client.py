@@ -4,7 +4,9 @@ from wiki_translation_harness.claude_code_client import (
     ClaudeCLIResult,
     ClaudeCodeClient,
     ClaudeCodeError,
+    ClaudeCodeSessionLimitError,
 )
+from wiki_translation_harness.models import InsufficientCreditsError
 
 _MESSAGES = [
     {"role": "system", "content": "You are a translator."},
@@ -344,3 +346,25 @@ async def test_rate_limit_429_fails_fast_without_retrying(monkeypatch):
     with pytest.raises(ClaudeCodeError, match="429"):
         await client.chat_completion("claude-sonnet-5", _MESSAGES)
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_429_raises_session_limit_error_for_fallback(monkeypatch):
+    """A 429 must raise the specific ClaudeCodeSessionLimitError subtype --
+    also an InsufficientCreditsError -- so pipeline.py's
+    ensure_fallback_engine() actually offers/auto-switches to
+    fallback_provider (opencode_go by default) instead of just failing the
+    chunk like any other EngineError."""
+    monkeypatch.setattr(
+        "wiki_translation_harness.claude_code_client.run_claude_cli",
+        lambda *a, **kw: ClaudeCLIResult(
+            is_error=True,
+            model_used="claude-sonnet-5",
+            stderr="You've hit your monthly spend limit",
+            raw={"api_error_status": 429},
+        ),
+    )
+    client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
+    with pytest.raises(ClaudeCodeSessionLimitError):
+        await client.chat_completion("claude-sonnet-5", _MESSAGES)
+    assert issubclass(ClaudeCodeSessionLimitError, InsufficientCreditsError)

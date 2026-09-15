@@ -99,15 +99,17 @@ def main(
     provider: Optional[str] = typer.Option(
         None, "--provider",
         help="'claude_code' (default, uses your Claude Code CLI login, no API key), "
-        "'openrouter', 'local' (any OpenAI-compatible server), or 'experiential' "
-        "(platform.experientiallabs.ai)",
+        "'openrouter', 'local' (any OpenAI-compatible server), 'experiential' "
+        "(platform.experientiallabs.ai), or 'opencode_go' (runs the `opencode` CLI "
+        "under its own separate login/session)",
     ),
     fallback_provider: Optional[str] = typer.Option(
         None, "--fallback-provider",
         help="Engine to switch to if --provider raises an insufficient-credits error "
-        "(e.g. OpenRouter HTTP 402) mid-run -- interactively confirmed here, applied "
-        "automatically (just logged) under `queue`. Defaults to 'claude_code' whenever "
-        "--provider isn't already claude_code.",
+        "(e.g. OpenRouter HTTP 402, or Claude Code hitting its own session/spend "
+        "limit) mid-run -- interactively confirmed here, applied automatically (just "
+        "logged) under `queue`. Defaults to 'opencode_go' when --provider is "
+        "claude_code, otherwise 'claude_code'.",
     ),
     base_url: Optional[str] = typer.Option(
         None, "--base-url", help="Override the active provider's base URL (pair with --provider local)"
@@ -306,7 +308,8 @@ def queue(
         None, "--fallback-provider",
         help="Engine to auto-switch to (logged, not prompted -- queue mode has no "
         "interactive terminal) if --provider raises an insufficient-credits error. "
-        "Defaults to 'claude_code' whenever --provider isn't already claude_code.",
+        "Defaults to 'opencode_go' when --provider is claude_code, otherwise "
+        "'claude_code'.",
     ),
     base_url: Optional[str] = typer.Option(None, "--base-url"),
     workers: Optional[int] = typer.Option(None, "--workers"),

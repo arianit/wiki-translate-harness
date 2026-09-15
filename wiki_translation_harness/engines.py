@@ -56,6 +56,21 @@ def build_llm_client(config: Config) -> tuple[LLMEngineClient, str]:
         )
         return client, config.model
 
+    if config.provider == "opencode_go":
+        # Local import, same reasoning as claude_code above: keeps this
+        # engine's subprocess-invocation imports out of the path for anyone
+        # only ever using openrouter/local/experiential/claude_code.
+        from wiki_translation_harness.opencode_go_client import OpenCodeGoClient
+
+        client = OpenCodeGoClient(
+            model=config.model,
+            cli_path=config.opencode_go_cli_path,
+            timeout_s=config.request_timeout_s,
+            max_retries=config.max_retries,
+            log_dir=config.log_dir,
+        )
+        return client, config.model
+
     base_url, api_key, model = resolve_llm_endpoint(config)
     client = OpenRouterClient(
         api_key=api_key,

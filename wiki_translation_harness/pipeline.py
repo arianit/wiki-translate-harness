@@ -551,7 +551,11 @@ async def run_pipeline(
                 if fallback_declined:
                     return False
                 target = config.fallback_provider or (
-                    "claude_code" if config.provider != "claude_code" else None
+                    # claude_code's own default fallback is opencode_go, not
+                    # itself -- a separate binary/session, so it isn't
+                    # affected by claude_code hitting its own session/spend
+                    # limit (see claude_code_client.ClaudeCodeSessionLimitError).
+                    "opencode_go" if config.provider == "claude_code" else "claude_code"
                 )
                 if not target or target == config.provider:
                     return False

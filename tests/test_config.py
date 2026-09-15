@@ -62,6 +62,21 @@ def test_switching_to_experiential_without_model_gets_experiential_default(monke
     assert cfg.model == "qwen3.8-27b"
 
 
+def test_switching_to_opencode_go_without_model_gets_auto_sentinel(monkeypatch):
+    cfg = build_config(None, {**_CONTACT, "provider": "opencode_go"})
+    assert cfg.model == "auto"
+
+
+def test_opencode_go_needs_no_api_key(monkeypatch):
+    # Unlike openrouter/experiential, opencode_go authenticates via the
+    # opencode CLI's own separate login -- build_config must not raise for
+    # lack of an API key the way it does for those two providers.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("EXPLABS_API_KEY", raising=False)
+    cfg = build_config(None, {**_CONTACT, "provider": "opencode_go"})
+    assert cfg.provider == "opencode_go"
+
+
 def test_cli_provider_switch_drops_stale_yaml_model(tmp_path: Path, monkeypatch):
     """Regression test: --provider claude_code alone, against a config.yaml
     with provider: openrouter and an OpenRouter model id, must not silently
@@ -161,6 +176,11 @@ def test_fallback_provider_round_trips():
 def test_fallback_provider_defaults_to_none():
     cfg = Config.model_validate({**_CONTACT})
     assert cfg.fallback_provider is None
+
+
+def test_opencode_go_accepted_as_fallback_provider():
+    cfg = Config.model_validate({**_CONTACT, "fallback_provider": "opencode_go"})
+    assert cfg.fallback_provider == "opencode_go"
 
 
 def test_invalid_fallback_provider_rejected():

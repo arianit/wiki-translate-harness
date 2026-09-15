@@ -6,24 +6,29 @@
 # provider: claude_code (default — runs `claude -p` under your existing
 # Claude Code CLI login/subscription, no API key needed), openrouter
 # (cloud), local (any OpenAI-compatible server: llama.cpp server, Ollama,
-# LM Studio, vLLM, ...), or experiential (platform.experientiallabs.ai, a
+# LM Studio, vLLM, ...), experiential (platform.experientiallabs.ai, a
 # curated multi-model gateway on the same OpenAI wire protocol as
-# OpenRouter). Override per run with `--provider openrouter` / `--provider
-# local` / `--provider experiential`; --model and --workers work the same
-# across all four. If you switch provider without also setting model below,
-# config.py picks a provider-appropriate default (claude-sonnet-5 for
-# claude_code, qwen3.8-27b for experiential, deepseek/deepseek-v3.2
+# OpenRouter), or opencode_go (runs the `opencode` CLI -- github.com/sst/opencode
+# -- under its own separate login/session, no API key needed here either).
+# Override per run with `--provider openrouter` / `--provider local` /
+# `--provider experiential` / `--provider opencode_go`; --model and
+# --workers work the same across all five. If you switch provider without
+# also setting model below, config.py picks a provider-appropriate default
+# (claude-sonnet-5 for claude_code, qwen3.8-27b for experiential, "auto"
+# meaning "let opencode pick" for opencode_go, deepseek/deepseek-v3.2
 # otherwise) rather than silently reusing whatever model id you had for the
 # other provider.
 provider: claude_code
 # If a call to `provider` fails with an insufficient-credits error (e.g.
-# OpenRouter HTTP 402), the harness offers to switch engines mid-run rather
+# OpenRouter HTTP 402, or Claude Code hitting its own account-level
+# session/spend limit), the harness offers to switch engines mid-run rather
 # than just failing every remaining chunk: interactively confirmed for a
 # manual `--title`/`--titles` run, auto-switched (just logged) for
-# unattended `queue` runs. Defaults to claude_code whenever `provider` isn't
-# already claude_code; set this to pick a different one, or to `provider`'s
-# own value to disable the offer entirely.
-# fallback_provider: claude_code
+# unattended `queue` runs. Defaults to opencode_go when `provider` is
+# claude_code (a separate binary/session, unaffected by Claude Code's own
+# limit), otherwise claude_code; set this to pick a different one, or to
+# `provider`'s own value to disable the offer entirely.
+# fallback_provider: opencode_go
 # No `model:` here either, for the same reason -- let it auto-derive.
 workers: 2
 sequential: true
@@ -106,6 +111,15 @@ openrouter_base_url: https://openrouter.ai/api/v1
 # nothing for a permission prompt to fire on either way).
 # claude_code_cli_path: claude
 # claude_code_permission_mode: bypassPermissions
+
+# Used only when provider: opencode_go. opencode_go_cli_path is the
+# `opencode` binary to invoke (override if it's not on PATH). No separate
+# opencode_go_model setting -- `model: auto` (the default when you switch to
+# this provider without also setting model) means "don't pass --model at
+# all, let opencode use its own configured default"; set model to a real
+# provider/model id (in opencode's own catalog, not OpenRouter's) to pin one.
+# opencode_go_cli_path: opencode
+
 # Sized for the largest oversized-section chunks (never split further, so a
 # protected table/template can push a single chunk to 10k+ input tokens) —
 # confirmed a real 12k-input/7k-output completion can legitimately take

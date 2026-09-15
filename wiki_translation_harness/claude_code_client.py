@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from wiki_translation_harness.models import EngineError, ModelPricing
+from wiki_translation_harness.models import EngineError, InsufficientCreditsError, ModelPricing
 from wiki_translation_harness.openrouter import RetryCallback
 
 # See mmtp/claude_cli.py's module docstring for the full incident writeup:
@@ -60,6 +60,20 @@ _TRUNCATION_CHECK_MIN_OUTPUT_TOKENS = 2000
 
 class ClaudeCodeError(EngineError):
     pass
+
+
+class ClaudeCodeSessionLimitError(ClaudeCodeError, InsufficientCreditsError):
+    """An account/org-level Claude Code rate or spend limit (HTTP 429) --
+    confirmed live: "You've hit your monthly spend limit", the 5-hour
+    session rate window, overage rejected. Raised as an
+    InsufficientCreditsError (not just a plain ClaudeCodeError) specifically
+    so pipeline.py's ensure_fallback_engine() offers/auto-switches to
+    config.fallback_provider (opencode_go by default -- see
+    default_model_for_provider and ensure_fallback_engine's `target`
+    selection) instead of just failing every remaining chunk against an
+    engine that's guaranteed to keep rejecting them. Still a ClaudeCodeError
+    too, so existing `except ClaudeCodeError` / `pytest.raises(ClaudeCodeError)`
+    call sites keep working unchanged."""
 
 
 @dataclass
@@ -384,7 +398,7 @@ class ClaudeCodeClient:
                 # time (up to ~60s per attempt) for a guaranteed-identical
                 # rejection every time, observed across many chunks in a
                 # row.
-                raise ClaudeCodeError(f"rate/spend limit (HTTP 429): {result.stderr}")
+                raise ClaudeCodeSessionLimitError(f"rate/spend limit (HTTP 429): {result.stderr}")
             if attempt > self.max_retries:
                 raise ClaudeCodeError(
                     f"claude CLI call failed after {attempt} attempts: {result.stderr}"

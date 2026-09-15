@@ -21,7 +21,7 @@ Each chunk moves through the same loop independently (dispatched across
 `workers` in parallel): a translation-memory cache check that lets a rerun
 resume for free, a prompt built from the skill file plus a verified-facts
 block computed by this harness, a call to whichever engine is selected
-(`claude_code`, `openrouter`, or `local` — all behind one duck-typed
+(`claude_code`, `openrouter`, `local`, `experiential`, or `opencode_go` — all behind one duck-typed
 `chat_completion()` contract in `engines.py`, see **Choosing an engine**
 below), and a validate/repair/retry cycle that falls through to a
 human-review queue rather than silently shipping a broken chunk.
@@ -180,7 +180,7 @@ local clone of the queue repo (default: see `DEFAULT_QUEUE_REPO_DIR` in
 
 ## Choosing an engine
 
-Four `--provider` values, selectable per run with no code change:
+Five `--provider` values, selectable per run with no code change:
 
 - **`claude_code`** (default) — runs `claude -p` under your existing Claude
   Code CLI login/subscription. No API key needed. Cost currently always
@@ -201,8 +201,17 @@ Four `--provider` values, selectable per run with no code change:
   directly, rather than computed from an external pricing table (its
   pricing endpoint shape, if any, is unconfirmed — see
   `wiki_translation_harness/openrouter.py`'s `fetch_pricing`).
+- **`opencode_go`** — runs `opencode run` under the [OpenCode
+  Go](https://github.com/sst/opencode) CLI's own separate login/session. No
+  API key needed here either. This is the harness's default fallback target
+  when `claude_code` hits its own account-level session/spend limit (see
+  below) — a different binary with its own auth, so it's unaffected by
+  Claude Code's cap. Cost also always reports as `$0.00` (no confirmed
+  machine-readable per-call cost from the CLI to read — see
+  `wiki_translation_harness/opencode_go_client.py`).
 
-Switch with `--provider openrouter` / `--provider local`, or set `provider:`
+Switch with `--provider openrouter` / `--provider local` / `--provider
+opencode_go`, or set `provider:`
 in `config.yaml`. `--model`/`--workers`/caching/verification/post-processing
 all behave the same regardless of engine. If you switch `--provider` without
 also passing `--model`, `build_config()` picks a provider-appropriate
@@ -222,8 +231,9 @@ provider-aware insufficient-quota and cost handling described below.
 
 ### Fallback on insufficient credits
 
-If the active provider rejects a call for lack of funds the harness offers
-to switch engines mid-run instead of failing every remaining chunk — a
+If the active provider rejects a call for lack of funds — or Claude Code
+hits its own account-level session/spend limit — the harness offers to
+switch engines mid-run instead of failing every remaining chunk — a
 distinct `InsufficientCreditsError`, not one of the retryable transient
 errors. The condition is detected differently per provider since it's
 signalled differently: OpenRouter uses a plain HTTP 402; Experiential Labs
@@ -231,15 +241,18 @@ instead uses HTTP 429 (otherwise a routine retryable status) with the JSON
 error body's `code` field set to `insufficient_quota` — branching on `code`
 rather than the human-readable `message` text, which Experiential Labs'
 docs explicitly warn isn't stable (see `OpenRouterClient._insufficient_quota_error`
-in `openrouter.py`). For an interactive `--title`/`--titles`/`--category`/
+in `openrouter.py`); Claude Code also uses HTTP 429 (`api_error_status`
+in its CLI's own JSON output), raised as `ClaudeCodeSessionLimitError` (see
+`claude_code_client.py`). For an interactive `--title`/`--titles`/`--category`/
 `--file`/`--directory` run it pauses the live progress table and asks; for
 `queue` mode (no interactive terminal) it switches automatically and just
 logs it. Either way the switch is one-way and sticks for the rest of that
 run.
 
 `--fallback-provider` (or `fallback_provider:` in config.yaml) picks the
-target; unset, it defaults to `claude_code` whenever the active provider
-isn't already `claude_code` (no API credits needed there). Set it to the
+target; unset, it defaults to `opencode_go` when the active provider is
+`claude_code` (a separate binary/session, unaffected by Claude Code's own
+limit), otherwise `claude_code` (no API credits needed there). Set it to the
 same value as `--provider` to disable the offer entirely.
 
 ## Local models

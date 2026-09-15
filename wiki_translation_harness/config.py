@@ -28,6 +28,16 @@ def default_model_for_provider(provider: str) -> str:
         # (platform.experientiallabs.ai/docs) rather than assuming its
         # catalog carries OpenRouter's deepseek/deepseek-v3.2 slug.
         return "qwen3.8-27b"
+    if provider == "opencode_go":
+        # "auto" is a sentinel, not a real model id: opencode_go_client.py
+        # omits --model entirely when it sees this, letting the `opencode`
+        # CLI fall back to whatever provider/model the caller's own opencode
+        # config already has set up as default -- this provider exists
+        # specifically as an escape hatch for when Claude Code's own
+        # session/spend limit is hit, so guessing a specific model id here
+        # (which may not even be one opencode is authenticated for) would
+        # defeat the point.
+        return "auto"
     return "deepseek/deepseek-v3.2"
 
 
