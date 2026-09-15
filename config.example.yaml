@@ -119,6 +119,18 @@ openrouter_base_url: https://openrouter.ai/api/v1
 # all, let opencode use its own configured default"; set model to a real
 # provider/model id (in opencode's own catalog, not OpenRouter's) to pin one.
 # opencode_go_cli_path: opencode
+#
+# opencode_go_agent: pin `run --agent` to a tools-locked-down agent name.
+# Confirmed live that `opencode run` has no `--tools ""` flag the way Claude
+# Code's CLI does -- a normal install's default "build" agent can carry
+# full bash/file/network permissions, which matters here since chunk text
+# is untrusted external wiki content. Define one in opencode's own config
+# (opencode.jsonc -- `opencode agent create` is an interactive-only wizard,
+# not scriptable) with every tool set to false; see the comment on
+# Config.opencode_go_agent in models.py for the exact JSON snippet. Left
+# unset (the default), this engine inherits whatever tool permissions
+# opencode's own config already grants its default agent.
+# opencode_go_agent: wiki-translation-harness
 
 # Sized for the largest oversized-section chunks (never split further, so a
 # protected table/template can push a single chunk to 10k+ input tokens) —

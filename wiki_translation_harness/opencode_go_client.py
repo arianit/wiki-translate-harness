@@ -1,6 +1,6 @@
-"""OpenCode Go engine (github.com/sst/opencode's Go CLI): runs `opencode run`
-non-interactively, under whichever model/provider the caller's own opencode
-config already has authenticated.
+"""OpenCode Go engine (github.com/sst/opencode's Go CLI): runs `opencode run
+--format json` non-interactively, under whichever model/provider the
+caller's own opencode config already has authenticated.
 
 This exists specifically as the harness's default fallback target when
 `provider: claude_code` hits its own account-level session/rate limit (see
@@ -9,15 +9,41 @@ ensure_fallback_engine) — opencode is a separate binary with its own,
 independent auth/session, so it isn't affected by Claude Code hitting its
 cap. It works standalone too via `--provider opencode_go`.
 
-Unlike claude_code_client.py's `claude -p --output-format stream-json`, the
-opencode CLI has no publicly-documented machine-readable single-shot output
-format to build against here, so this deliberately treats it as a plain
-Unix filter: the combined prompt goes over stdin, the full stdout is the
-result text, and a non-zero exit code (or a recognizable rate/usage-limit
-message on stderr) is the only error signal. That means no real token/cost
-accounting is available for this engine (get_pricing_for returns None, same
-as the "local" and claude_code engines) — a future revision can tighten this
-against opencode's actual output contract if/when it grows one.
+The wire contract below was confirmed directly against a real, installed
+`opencode` v1.18.31 binary (not assumed from docs):
+
+- `opencode run [message..] --format json` with no positional message reads
+  the message from stdin instead (confirmed: an empty stdin fails fast with
+  "You must provide a message or a command", exit 1 -- it does not hang
+  waiting on a TTY). This is what lets the combined system+user prompt go
+  over stdin exactly like claude_code_client.run_claude_cli, sidestepping
+  the OS argv size limit a full article plus skill text could hit.
+- stdout is newline-delimited JSON events, one per line, at minimum
+  `step_start` -> `text` (one full block per turn, not incremental deltas,
+  in every case observed) -> `step_finish`. `step_finish`'s `part.tokens`
+  carries `{total, input, output, reasoning, cache: {write, read}}` and
+  `part.cost` a real per-call cost -- both fed into TranslationResult via
+  chat_completion's usage_out the same way openrouter.py's Experiential
+  Labs branch already does (see run_completion's `reported_cost`), rather
+  than the $0-always some other CLI-based engines here report.
+- A failure emits a `{"type":"error","error":{"name":...,"data":{"message":
+  ...}}}` event **on stdout**, not stderr (confirmed: stderr was empty on a
+  bad-model rejection), alongside a non-zero exit code. The default
+  (non-JSON) format's own error rendering is stderr instead, so the client
+  below always requests --format json and never has to guess which stream
+  a diagnostic landed on.
+
+One important caveat this session's live check surfaced, which callers
+should know about: `opencode run`'s default "build" agent, on a normal
+opencode install, can have full bash/file/network tool permissions --
+unlike claude_code_client.py's `claude -p --tools ""`, there is no
+`--tools ""` equivalent on `run` itself. Since chunk text here is untrusted
+external wiki content, config.opencode_go_agent lets a caller pin `--agent`
+to a tools-locked-down agent name (see models.Config's opencode_go_agent
+docstring for the config snippet that defines one) -- left unset, this
+engine inherits whatever tool permissions opencode's own config already
+grants its default agent, same as it would for a human running `opencode
+run` by hand.
 
 Exposes OpenCodeGoClient, satisfying the same duck-typed contract
 OpenRouterClient/ClaudeCodeClient do (see engines.LLMEngineClient) so
@@ -27,6 +53,7 @@ to use it.
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import subprocess
 from dataclasses import dataclass, field
@@ -36,11 +63,14 @@ from typing import Any
 from wiki_translation_harness.models import EngineError, InsufficientCreditsError, ModelPricing
 from wiki_translation_harness.openrouter import RetryCallback
 
-# Substrings looked for (case-insensitively) in a failed call's stderr/stdout
+# Substrings looked for (case-insensitively) in a failed call's error message
 # to recognize an account/session-level usage limit -- as opposed to a
-# transient failure worth retrying. Deliberately broad/lowercase-matched
-# since, unlike Claude Code's structured `api_error_status` field, opencode
-# gives no confirmed structured error shape to branch on here.
+# transient failure worth retrying. Deliberately broad/lowercase-matched:
+# the one real error this session could trigger live (an unrecognized
+# model id) came back as a generic "Unexpected server error" with no
+# specific code to branch on instead, so a genuine rate/quota rejection's
+# exact wording remains unconfirmed -- keep these broad rather than
+# over-fitting to a guess.
 _SESSION_LIMIT_MARKERS = (
     "rate limit",
     "rate_limit",
@@ -70,7 +100,9 @@ class OpenCodeGoSessionLimitError(OpenCodeGoError, InsufficientCreditsError):
 class OpenCodeCLIResult:
     is_error: bool
     result_text: str = ""
-    duration_ms: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float | None = None
     model_used: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
     stderr: str = ""
@@ -82,6 +114,7 @@ def run_opencode_cli(
     *,
     model: str,
     cli_path: str = "opencode",
+    agent: str | None = None,
     timeout_s: float = 600.0,
 ) -> OpenCodeCLIResult:
     """Single-shot, blocking call -- see OpenCodeGoClient.chat_completion for
@@ -94,13 +127,16 @@ def run_opencode_cli(
     might not even be authenticated for.
 
     The system and user prompt are combined into a single stdin payload
-    (opencode's `run` has no confirmed separate system-prompt flag the way
-    Claude Code's CLI does) rather than passed as a positional argument,
-    since full articles plus skill content can exceed the OS argv size
-    limit -- same reasoning as claude_code_client.run_claude_cli."""
-    cmd = [cli_path, "run"]
+    (opencode's `run` has no separate system-prompt flag) rather than passed
+    as a positional argument, since full articles plus skill content can
+    exceed the OS argv size limit -- same reasoning as
+    claude_code_client.run_claude_cli, and confirmed live that `run` reads
+    stdin as the message when none is given positionally."""
+    cmd = [cli_path, "run", "--format", "json"]
     if model != "auto":
         cmd += ["--model", model]
+    if agent:
+        cmd += ["--agent", agent]
 
     combined_prompt = f"{system_prompt}\n\n{user_prompt}" if system_prompt else user_prompt
 
@@ -125,8 +161,52 @@ def run_opencode_cli(
             stderr=f"opencode CLI not found ({cli_path!r}): {exc}",
         )
 
-    if proc.returncode != 0:
-        stderr_msg = (proc.stderr or proc.stdout or "unknown error").strip()[:2000]
+    text_blocks: list[str] = []
+    prompt_tokens = 0
+    completion_tokens = 0
+    cost_usd: float | None = None
+    error_message: str | None = None
+    saw_any_event = False
+
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        saw_any_event = True
+        event_type = event.get("type")
+        part = event.get("part") or {}
+        if event_type == "text" and part.get("text"):
+            text_blocks.append(part["text"])
+        elif event_type == "step_finish":
+            tokens = part.get("tokens") or {}
+            cache = tokens.get("cache") or {}
+            # Mirrors claude_code_client's cache-token accounting: opencode
+            # also reports cache reads/writes separately from `input`, and
+            # all three genuinely were part of that step's input context.
+            prompt_tokens += (
+                tokens.get("input", 0) + cache.get("write", 0) + cache.get("read", 0)
+            )
+            completion_tokens += tokens.get("output", 0)
+            step_cost = part.get("cost")
+            if step_cost is not None:
+                cost_usd = (cost_usd or 0.0) + float(step_cost)
+        elif event_type == "error":
+            error = event.get("error") or {}
+            error_message = (
+                (error.get("data") or {}).get("message")
+                or error.get("name")
+                or json.dumps(error)
+            )
+
+    if proc.returncode != 0 or error_message is not None:
+        stderr_msg = (
+            error_message
+            or (proc.stderr or proc.stdout or "unknown error").strip()
+        )[:2000]
         return OpenCodeCLIResult(
             is_error=True,
             model_used=model,
@@ -134,9 +214,16 @@ def run_opencode_cli(
             raw={"returncode": proc.returncode},
         )
 
+    if not saw_any_event:
+        stderr_msg = (proc.stderr or proc.stdout or "no parseable JSON events").strip()[:2000]
+        return OpenCodeCLIResult(is_error=True, model_used=model, stderr=stderr_msg)
+
     return OpenCodeCLIResult(
         is_error=False,
-        result_text=proc.stdout.strip(),
+        result_text="".join(text_blocks).strip(),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cost_usd=cost_usd,
         model_used=model,
         stderr=proc.stderr or "",
     )
@@ -147,20 +234,22 @@ class OpenCodeGoClient:
         self,
         model: str,
         cli_path: str = "opencode",
+        agent: str | None = None,
         timeout_s: float = 600.0,
         max_retries: int = 5,
         log_dir: Path | str | None = None,
     ):
         self.model = model
         self.cli_path = cli_path
+        self.agent = agent
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         # Accepted for interface parity with ClaudeCodeClient (both are
         # constructed generically by engines.build_llm_client) but unused --
         # run_opencode_cli has no per-call diagnostic dump the way
-        # claude_code_client._write_diagnostic_log does, since opencode's
-        # stdout is already the plain result text, not a raw stream to
-        # preserve for later inspection.
+        # claude_code_client._write_diagnostic_log does; a failed call's
+        # full JSON stream is short enough to just live in the raised
+        # exception's message.
         self.log_dir = log_dir
 
     async def chat_completion(
@@ -172,11 +261,12 @@ class OpenCodeGoClient:
         usage_out: dict | None = None,
     ) -> tuple[str, int, int]:
         """Returns (text, prompt_tokens, completion_tokens). temperature is
-        ignored (no CLI equivalent); prompt/completion token counts are
-        always 0 -- see module docstring on the lack of a confirmed
-        machine-readable output format to read real usage from. usage_out is
-        accepted for interface parity with OpenRouterClient/ClaudeCodeClient
-        but left unfilled.
+        ignored (no CLI equivalent). usage_out, when passed, is filled with
+        {"cost": <float>} whenever opencode reports one for the call --
+        openrouter.run_completion (used for every engine, not just
+        OpenRouterClient) prefers this reported cost over its external
+        per-token pricing-table estimate, the same path Experiential Labs
+        already uses.
 
         messages is always exactly [{"role":"system",...},{"role":"user",...}]
         -- the fixed shape skill_loader.build_translation_messages/
@@ -197,10 +287,13 @@ class OpenCodeGoClient:
                 user_prompt,
                 model=model,
                 cli_path=self.cli_path,
+                agent=self.agent,
                 timeout_s=self.timeout_s,
             )
             if not result.is_error:
-                return result.result_text, 0, 0
+                if usage_out is not None and result.cost_usd is not None:
+                    usage_out["cost"] = result.cost_usd
+                return result.result_text, result.prompt_tokens, result.completion_tokens
 
             attempt += 1
             if "opencode CLI not found" in result.stderr:
@@ -228,10 +321,12 @@ class OpenCodeGoClient:
         await asyncio.sleep(delay)
 
     async def get_pricing_for(self, model: str) -> ModelPricing | None:
-        # No pricing table -- opencode's own per-call cost, if any, isn't
-        # exposed through a confirmed machine-readable output here. Same
-        # $0-reported-cost tradeoff already accepted for "local" and
-        # claude_code.
+        # No pricing table -- real per-call cost, when opencode reports one,
+        # reaches TranslationResult through chat_completion's usage_out
+        # instead (see run_completion's reported_cost preference), same
+        # mechanism Experiential Labs uses. Zero-cost calls (a free
+        # opencode/* model, or a step that reports no cost field) still
+        # report $0, same as this returning None always would.
         return None
 
     async def fetch_pricing(self) -> dict[str, ModelPricing]:

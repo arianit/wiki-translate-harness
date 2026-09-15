@@ -201,14 +201,19 @@ Five `--provider` values, selectable per run with no code change:
   directly, rather than computed from an external pricing table (its
   pricing endpoint shape, if any, is unconfirmed — see
   `wiki_translation_harness/openrouter.py`'s `fetch_pricing`).
-- **`opencode_go`** — runs `opencode run` under the [OpenCode
+- **`opencode_go`** — runs `opencode run --format json` under the [OpenCode
   Go](https://github.com/sst/opencode) CLI's own separate login/session. No
   API key needed here either. This is the harness's default fallback target
   when `claude_code` hits its own account-level session/spend limit (see
   below) — a different binary with its own auth, so it's unaffected by
-  Claude Code's cap. Cost also always reports as `$0.00` (no confirmed
-  machine-readable per-call cost from the CLI to read — see
-  `wiki_translation_harness/opencode_go_client.py`).
+  Claude Code's cap. Unlike the other CLI-based engine here, this reports
+  real per-call token counts and cost, read directly from the CLI's JSON
+  event stream (confirmed live against opencode v1.18.31 — see
+  `wiki_translation_harness/opencode_go_client.py`'s module docstring for
+  the full contract). One caveat surfaced by that same live check: `opencode
+  run` has no `--tools ""` equivalent, so unlike Claude Code's engine it may
+  run with full tool permissions unless you pin `opencode_go_agent` to a
+  locked-down agent (see `config.example.yaml`).
 
 Switch with `--provider openrouter` / `--provider local` / `--provider
 opencode_go`, or set `provider:`

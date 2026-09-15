@@ -402,6 +402,28 @@ class Config(BaseModel):
     # means: don't pass --model at all, let opencode use its own configured
     # default provider/model.
     opencode_go_cli_path: str = "opencode"
+    # `opencode run` has no `--tools ""` equivalent the way Claude Code's CLI
+    # does -- confirmed live that a normal opencode install's default "build"
+    # agent can carry full bash/file/network tool permissions. Since chunk
+    # text here is untrusted external wiki content, set this to the name of
+    # a locked-down agent (passed straight to `run --agent`) to disable tool
+    # use for this engine specifically. Define one in opencode's own config
+    # (~/.config/opencode/opencode.jsonc, or a project-local opencode.jsonc
+    # -- `opencode agent create` is an interactive-only wizard, not
+    # scriptable) with every tool set to false, e.g.:
+    #   "agent": {
+    #     "wiki-translation-harness": {
+    #       "mode": "all",
+    #       "tools": {"bash": false, "edit": false, "webfetch": false,
+    #                 "read": false, "write": false, "glob": false,
+    #                 "grep": false, "task": false, "todowrite": false,
+    #                 "websearch": false, "lsp": false, "skill": false}
+    #     }
+    #   }
+    # then set opencode_go_agent: wiki-translation-harness. None (the
+    # default) leaves whichever tool permissions opencode's own config
+    # already grants its default agent untouched.
+    opencode_go_agent: str | None = None
 
     # Wikimedia's User-Agent policy (foundation.wikimedia.org/wiki/Policy:User-Agent_policy)
     # requires automated requests to self-identify with a contact (email or URL) so the

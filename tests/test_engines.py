@@ -46,6 +46,14 @@ def test_opencode_go_provider_dispatches_to_opencode_go_client():
     assert effective_model == "auto"
 
 
+def test_opencode_go_agent_config_threaded_through():
+    client, _ = build_llm_client(
+        _config(provider="opencode_go", model="auto", opencode_go_agent="wiki-translation-harness")
+    )
+    assert isinstance(client, OpenCodeGoClient)
+    assert client.agent == "wiki-translation-harness"
+
+
 def test_experiential_provider_falls_back_to_experiential_model():
     client, effective_model = build_llm_client(
         _config(

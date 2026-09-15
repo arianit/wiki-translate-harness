@@ -65,6 +65,7 @@ def build_llm_client(config: Config) -> tuple[LLMEngineClient, str]:
         client = OpenCodeGoClient(
             model=config.model,
             cli_path=config.opencode_go_cli_path,
+            agent=config.opencode_go_agent,
             timeout_s=config.request_timeout_s,
             max_retries=config.max_retries,
             log_dir=config.log_dir,
