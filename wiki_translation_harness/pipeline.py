@@ -815,6 +815,12 @@ async def run_pipeline(
             cache.close()
         if verification_cache is not None:
             verification_cache.close()
+        # config.provider/model reflect whichever engine was actually in
+        # force when the run ended, including a mid-run fallback switch
+        # (ensure_fallback_engine) -- callers like queue_runner.py want
+        # that effective value, not just what the run started with.
+        stats_tracker.stats.provider = config.provider
+        stats_tracker.stats.model = config.model
         stats_tracker.write(config.stats_path)
 
     return stats_tracker

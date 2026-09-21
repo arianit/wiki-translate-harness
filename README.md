@@ -171,12 +171,17 @@ wiki-translation-harness queue --provider openrouter --model deepseek/deepseek-v
 Each run pulls the queue repo, claims the first line with no status field
 (a `CLAIMED` line older than `--stale-hours`, default 3, is treated as
 abandoned and reclaimed), translates it with the same pipeline `--title`
-uses, then marks the line `DONE` or `FAILED` and pushes. Because the claim
-is committed before translation starts, two machines draining the same
-queue at once don't pick the same article. `--queue-repo-dir` points at a
-local clone of the queue repo (default: see `DEFAULT_QUEUE_REPO_DIR` in
-`queue_runner.py`); add a new article by appending a line to
-`totranslate.txt` in that repo, not by passing `--title`.
+uses, then marks the line `DONE` or `FAILED` and pushes. The `DONE`/`FAILED`
+status also records which engine actually ran, e.g.
+`DONE\tprovider=claude_code\tmodel=claude-sonnet-5` — this is the
+*effective* provider/model (reflecting a mid-run fallback-provider switch,
+see **Choosing an engine** below), not necessarily what `--provider`/
+`--model` started the run with. Because the claim is committed before
+translation starts, two machines draining the same queue at once don't pick
+the same article. `--queue-repo-dir` points at a local clone of the queue
+repo (default: see `DEFAULT_QUEUE_REPO_DIR` in `queue_runner.py`); add a
+new article by appending a line to `totranslate.txt` in that repo, not by
+passing `--title`.
 
 ## Choosing an engine
 

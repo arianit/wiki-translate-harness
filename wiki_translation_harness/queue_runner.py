@@ -31,6 +31,18 @@ def load_queue_lib(repo_dir: Path):
     return module
 
 
+def _status_with_engine(status: str, article_stats: StatsTracker, config: Config) -> str:
+    """Appends `provider=...\tmodel=...` to a DONE/FAILED status so
+    totranslate.txt records which engine actually produced (or failed to
+    produce) each result. Prefers the effective provider/model pipeline.py
+    stamped on article_stats.stats (reflects a mid-run fallback-provider
+    switch, see ensure_fallback_engine); falls back to the run's starting
+    config if the article crashed before that was ever set."""
+    provider = article_stats.stats.provider or config.provider
+    model = article_stats.stats.model or config.model
+    return f"{status}\tprovider={provider}\tmodel={model}"
+
+
 async def run_queue_mode(
     config: Config,
     queue_repo_dir: Path = DEFAULT_QUEUE_REPO_DIR,
@@ -73,8 +85,9 @@ async def run_queue_mode(
             )
         except Exception as exc:  # noqa: BLE001 - must still record FAILED and move on to the next article
             logger.exception("Queue article %s crashed", url)
+            status_line = _status_with_engine("FAILED", article_stats, config)
             try:
-                queue_lib.finish_line(queue_repo_dir, line_no, url, "FAILED", reason=str(exc)[:200])
+                queue_lib.finish_line(queue_repo_dir, line_no, url, status_line, reason=str(exc)[:200])
             except queue_lib.QueueSyncError as sync_exc:
                 logger.error("Could not push FAILED result for %s: %s", url, sync_exc)
             stats.articles_failed += 1
@@ -87,8 +100,9 @@ async def run_queue_mode(
         else:
             status, reason = "FAILED", "translation did not complete (see run.log for this article)"
             stats.articles_failed += 1
+        status_line = _status_with_engine(status, article_stats, config)
         try:
-            queue_lib.finish_line(queue_repo_dir, line_no, url, status, reason=reason)
+            queue_lib.finish_line(queue_repo_dir, line_no, url, status_line, reason=reason)
         except queue_lib.QueueSyncError as sync_exc:
             logger.error("Could not push %s result for %s: %s", status, url, sync_exc)
         processed += 1

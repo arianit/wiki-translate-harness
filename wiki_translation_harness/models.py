@@ -166,6 +166,12 @@ class RunStats(BaseModel):
 
     started_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
+    # Effective provider/model in force when this run ended -- set from the
+    # (possibly fallback-switched, see pipeline.py's ensure_fallback_engine)
+    # config, not necessarily what the run started with. None if the run
+    # crashed before build_llm_client() ever ran.
+    provider: str | None = None
+    model: str | None = None
     articles_completed: int = 0
     articles_failed: int = 0
     articles_skipped: int = 0
