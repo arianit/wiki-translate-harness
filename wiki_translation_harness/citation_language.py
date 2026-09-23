@@ -404,6 +404,70 @@ def fix_sfn_param_names(wikitext: str) -> SfnParamFixResult:
     return SfnParamFixResult(patched_wikitext=str(code), renamed=renamed)
 
 
+# Only the templates that generate their OWN <ref> internally (via
+# Module:Footnotes' {{#tag:ref|...}}) belong here. {{harvnb}}/{{harv}}/
+# {{harvp}} deliberately do NOT self-wrap — they render a bare parenthetical
+# link and are routinely wrapped in an explicit <ref> by design, so
+# unwrap_redundant_sfn_ref must not touch them (unlike
+# _SHORT_FOOTNOTE_TEMPLATE_NAMES above, which groups all six for the |ps=
+# dedup check, where self-wrapping doesn't matter).
+_SELF_WRAPPING_FOOTNOTE_TEMPLATE_NAMES = {"sfn", "sfnp", "sfnm"}
+
+
+@dataclass
+class RefUnwrapResult:
+    patched_wikitext: str
+    unwrapped: list[str]  # each sfn/sfnp/sfnm call that had its wrapper stripped
+
+
+def unwrap_redundant_sfn_ref(wikitext: str) -> RefUnwrapResult:
+    """Strips a redundant <ref>...</ref> wrapped directly around a lone
+    {{sfn}}/{{sfnp}}/{{sfnm}} call.
+
+    Confirmed live against sq.wikipedia (2026-09-22, 'Conservatism'): {{sfn}}
+    already expands to its own <ref name="FOOTNOTE...">...</ref> internally,
+    so wrapping it in another explicit <ref> nests one <ref> inside another.
+    MediaWiki's Cite extension doesn't reject this outright, but it corrupts
+    the extension's usage tracking for the auto-generated FOOTNOTE... name —
+    live action=parse rendered it as "Cite error: <ref> tag with name
+    'FOOTNOTE...' defined in <references> is not used in prior text", even
+    though the (only) occurrence of that name was sitting right there. The
+    model does this occasionally despite using bare {{sfn}} correctly
+    everywhere else in the same article; whether the LLM-based
+    assembly-repair loop (pipeline.py) can even fix it once live-validate
+    flags it is beside the point — a single {{sfn}} occurrence is never a
+    named ref another chunk could plausibly "reuse", so there's nothing for
+    a repair round to reconcile against, and broadcasting the fix to every
+    chunk (see pipeline.py's _chunk_mentions_ref) risks manufacturing a real
+    same-name collision instead of just removing the wrapper. This is purely
+    mechanical, so it belongs here rather than in a repair prompt.
+
+    Only unwraps a *bare* <ref> (no name=) whose entire trimmed content is
+    that one template call and nothing else — a named ref, or a ref with
+    other prose alongside the sfn call, is left for repair since unwrapping
+    either could silently change meaning (a name= may be relied on for
+    reuse elsewhere) or drop content (accompanying prose)."""
+    code = mwp.parse(wikitext)
+    unwrapped: list[str] = []
+    for tag in code.filter_tags(recursive=True):
+        if str(tag.tag).strip().lower() != "ref" or tag.has("name"):
+            continue
+        contents = tag.contents
+        if contents is None:
+            continue
+        templates = contents.filter_templates(recursive=False)
+        if len(templates) != 1:
+            continue
+        tmpl = templates[0]
+        if str(tmpl.name).strip().lower() not in _SELF_WRAPPING_FOOTNOTE_TEMPLATE_NAMES:
+            continue
+        if str(contents).strip() != str(tmpl).strip():
+            continue  # extra text beside the sfn call -- not a clean wrap
+        unwrapped.append(str(tmpl).strip())
+        code.replace(tag, str(tmpl))
+    return RefUnwrapResult(patched_wikitext=str(code), unwrapped=unwrapped)
+
+
 @dataclass
 class FootnoteDedupeResult:
     patched_wikitext: str

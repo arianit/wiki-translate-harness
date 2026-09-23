@@ -22,6 +22,7 @@ from wiki_translation_harness.citation_language import (
     fill_missing_citation_languages,
     fix_citation_param_names,
     fix_sfn_param_names,
+    unwrap_redundant_sfn_ref,
 )
 from wiki_translation_harness.report import build_attribution_block
 from wiki_translation_harness.live_validator import validate_wikitext_live
@@ -248,6 +249,19 @@ async def run_assembly_repair(
                 )
         except Exception as exc:
             logger.warning("Sfn parameter name fix failed for %r: %s", source.title, exc)
+
+        try:
+            unwrap_result = unwrap_redundant_sfn_ref(text)
+            text = unwrap_result.patched_wikitext
+            if unwrap_result.unwrapped:
+                logger.info(
+                    "Unwrapped %d redundant <ref>{{sfn}}</ref> wrapper(s) in %r: %s",
+                    len(unwrap_result.unwrapped),
+                    source.title,
+                    unwrap_result.unwrapped,
+                )
+        except Exception as exc:
+            logger.warning("Redundant sfn-ref unwrap failed for %r: %s", source.title, exc)
 
         if config.dedupe_short_footnotes:
             try:

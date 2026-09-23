@@ -8,6 +8,7 @@ from wiki_translation_harness.citation_language import (
     fill_missing_citation_languages,
     fix_citation_param_names,
     guess_language_from_title,
+    unwrap_redundant_sfn_ref,
 )
 
 
@@ -311,3 +312,54 @@ def test_dedupe_short_footnotes_three_or_more_calls():
     assert result.patched_wikitext.count("ps=A") == 3
     assert "ps=B" not in result.patched_wikitext
     assert "ps=C" not in result.patched_wikitext
+
+
+def test_unwrap_redundant_sfn_ref_strips_bare_wrapper():
+    # Confirmed live against sq.wikipedia (Conservatism, 2026-09-22): {{sfn}}
+    # already expands to its own <ref name="FOOTNOTE...">...</ref>, so an
+    # extra outer <ref> around it corrupts Cite's usage tracking for that
+    # auto-generated name.
+    text = "A.<ref>{{sfn|Eccleshall|1990|p=83}}</ref> B."
+    result = unwrap_redundant_sfn_ref(text)
+    assert result.patched_wikitext == "A.{{sfn|Eccleshall|1990|p=83}} B."
+    assert result.unwrapped == ["{{sfn|Eccleshall|1990|p=83}}"]
+
+
+def test_unwrap_redundant_sfn_ref_handles_sfnp_and_sfnm():
+    text = "<ref>{{sfnp|Smith|2020|p=1}}</ref><ref>{{sfnm|1a1=Jones|1y=2019}}</ref>"
+    result = unwrap_redundant_sfn_ref(text)
+    assert result.patched_wikitext == "{{sfnp|Smith|2020|p=1}}{{sfnm|1a1=Jones|1y=2019}}"
+    assert len(result.unwrapped) == 2
+
+
+def test_unwrap_redundant_sfn_ref_leaves_bare_sfn_untouched():
+    text = "Already correct: {{sfn|Smith|2020|p=1}} inline."
+    result = unwrap_redundant_sfn_ref(text)
+    assert result.patched_wikitext == text
+    assert result.unwrapped == []
+
+
+def test_unwrap_redundant_sfn_ref_leaves_named_ref_untouched():
+    # A name= may be relied on for reuse elsewhere (<ref name="x" />) --
+    # unwrapping could silently break that, so this is left for repair.
+    text = '<ref name="x">{{sfn|Smith|2020|p=1}}</ref>'
+    result = unwrap_redundant_sfn_ref(text)
+    assert result.patched_wikitext == text
+    assert result.unwrapped == []
+
+
+def test_unwrap_redundant_sfn_ref_leaves_extra_prose_untouched():
+    # Content beside the sfn call would be dropped by a naive unwrap.
+    text = "<ref>{{sfn|Smith|2020|p=1}} see also the discussion above.</ref>"
+    result = unwrap_redundant_sfn_ref(text)
+    assert result.patched_wikitext == text
+    assert result.unwrapped == []
+
+
+def test_unwrap_redundant_sfn_ref_does_not_touch_harvnb():
+    # {{harvnb}}/{{harv}}/{{harvp}} don't self-wrap -- wrapping them in an
+    # explicit <ref> is normal, correct usage, not a bug to fix.
+    text = "<ref>{{harvnb|Smith|2020|p=1}}</ref>"
+    result = unwrap_redundant_sfn_ref(text)
+    assert result.patched_wikitext == text
+    assert result.unwrapped == []
