@@ -173,7 +173,7 @@ Each run pulls the queue repo, claims the first line with no status field
 abandoned and reclaimed), translates it with the same pipeline `--title`
 uses, then marks the line `DONE` or `FAILED` and pushes. The `DONE`/`FAILED`
 status also records which engine actually ran, e.g.
-`DONE\tprovider=claude_code\tmodel=claude-sonnet-5` — this is the
+`DONE\tclaude-sonnet-5@claude_code` — this is the
 *effective* provider/model (reflecting a mid-run fallback-provider switch,
 see **Choosing an engine** below), not necessarily what `--provider`/
 `--model` started the run with. Because the claim is committed before

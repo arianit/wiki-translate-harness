@@ -32,7 +32,7 @@ def load_queue_lib(repo_dir: Path):
 
 
 def _status_with_engine(status: str, article_stats: StatsTracker, config: Config) -> str:
-    """Appends `provider=...\tmodel=...` to a DONE/FAILED status so
+    """Appends `model@provider` to a DONE/FAILED status so
     totranslate.txt records which engine actually produced (or failed to
     produce) each result. Prefers the effective provider/model pipeline.py
     stamped on article_stats.stats (reflects a mid-run fallback-provider
@@ -40,7 +40,7 @@ def _status_with_engine(status: str, article_stats: StatsTracker, config: Config
     config if the article crashed before that was ever set."""
     provider = article_stats.stats.provider or config.provider
     model = article_stats.stats.model or config.model
-    return f"{status}\tprovider={provider}\tmodel={model}"
+    return f"{status}\t{model}@{provider}"
 
 
 async def run_queue_mode(
