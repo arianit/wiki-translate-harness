@@ -1,304 +1,139 @@
 # wiki-translation-harness
 
-Batch harness that translates Wikipedia articles into a target-language wiki
-source (built and tested for English → Albanian sq.wikipedia), via the
-Claude Code CLI by default, OpenRouter, a local OpenAI-compatible server, or
-Experiential Labs — see **Choosing an engine** below. All translation judgment is delegated
-to the
+Batch tool that translates Wikipedia articles into wikitext for another
+language edition. Built and tested for English → Albanian (sq.wikipedia).
+
+The harness contains no translation prompts. All translation judgment comes
+from the
 [enwiki-sqwiki-translation](https://github.com/arianit/enwiki-sqwiki-translation)
-Pi skill — split across three directories in that repo (translate, `wikiterms`,
-`wikiqa`) which this harness loads and concatenates, since it has no
-Skill-tool equivalent to invoke them on demand the way an interactive agent
-would. This harness only fetches, splits, invokes, validates, retries,
-caches, verifies facts, estimates cost, and saves. It contains no
-translation prompts.
+skill. The harness only fetches, splits, calls the model, validates,
+repairs, caches, verifies facts, and saves. It never publishes anything.
 
-## Architecture
+## How it works
 
-![Per-chunk translation pipeline: fetch and split an article, then for each chunk check the cache, build a prompt from the skill plus verified facts, send it to one of three swappable engines, validate and repair or flag for review, cache the result, then assemble, post-process, and write output and report files.](docs/architecture.svg)
+![Per-chunk translation pipeline: fetch and split an article, then for each chunk check the cache, build a prompt from the skill plus verified facts, send it to one of the engines, validate and repair or flag for review, cache the result, then assemble, post-process, and write output and report files.](docs/architecture.svg)
 
-Each chunk moves through the same loop independently (dispatched across
-`workers` in parallel): a translation-memory cache check that lets a rerun
-resume for free, a prompt built from the skill file plus a verified-facts
-block computed by this harness, a call to whichever engine is selected
-(`claude_code`, `openrouter`, `local`, `experiential`, or `opencode_go` — all behind one duck-typed
-`chat_completion()` contract in `engines.py`, see **Choosing an engine**
-below), and a validate/repair/retry cycle that falls through to a
-human-review queue rather than silently shipping a broken chunk.
+1. Fetch the article and split it into chunks.
+2. Look up link targets, templates and infobox parameters on Wikidata and
+   the target wiki (see **Fact verification**).
+3. Translate each chunk (in parallel, up to `workers`). Chunks already in
+   the translation-memory cache are reused.
+4. Validate each chunk. On a defect, ask the model to repair it; if repair
+   fails, the chunk goes to a human-review queue instead of being shipped.
+5. Assemble the article, apply deterministic fixes, validate it again
+   (statically and by rendering it through the target wiki's parse API),
+   and write the `.wiki` file plus a report.
 
-## Example Benchmark: Enji (deity)
+### How the skill is used
 
-A recent benchmark translating the English article **"Enji (deity)"** to Albanian compared four models with blind evaluation by Claude Sonnet 4.5:
+A single chat-completion call has no tools or internet, so the harness:
 
-**Results:**
-- **deepseek/deepseek-v3.2**: 9/10 overall, $0.0620, 220.0 tokens/sec
-- **google/gemini-2.5-flash**: 9/10 overall, $0.1284, 621.8 tokens/sec  
-- **mistralai/mistral-large**: 8/10 overall, $0.5422, 127.8 tokens/sec
-- **qwen/qwen3-235b-a22b**: 6/10 overall, $0.1830, 176.8 tokens/sec
-
-**Judge's ranking (blind):** deepseek/deepseek-v3.2 > google/gemini-2.5-flash > mistralai/mistral-large > qwen/qwen3-235b-a22b
-
-**Total cost:** $1.2825 ($0.9156 translation + $0.3669 evaluation)
-
-**Recommendation:** `deepseek/deepseek-v3.2` offers the best quality/cost balance for English→Albanian Wikipedia translation; `google/gemini-2.5-flash` is 3× faster with identical quality.
-
-*Full results are documented in [GitHub Issue #1](https://github.com/arianit/wiki-translate-harness/issues/1).*
-
-## How skill invocation works
-
-The skill was written to be followed by an interactive agent with shell/tool
-access (curl, grep, Write). A single OpenRouter chat-completion call has none
-of that. So the harness loads the skill's `SKILL.md` from disk verbatim and
-uses it as the system prompt for each per-section OpenRouter call, prefixed
-with a small fixed "invocation frame" (see
-`wiki_translation_harness/skill_loader.py`) that tells the model it has no
-tools/internet in this call and should skip steps that require live
-lookups. That frame carries zero translation guidance of its own — every
-grammar/vocabulary/convention rule still comes from the skill file.
-
-By default the skill is read from a pinned git revision
-(`skill_git_ref: HEAD` in config.yaml) rather than the live working tree, so
-local uncommitted edits to the skill's own repo don't silently change
-translation behavior mid-run.
-
-Because a single completion call has no tools, the harness does the skill's
-live-research steps itself and hands the model verified facts instead (see
-**Fact verification** below) — this is what makes the "no tools" limitation
-workable in practice.
-
-**Only the skill content actually needed for a given call is sent.** The
-skill is split across three directories — enwiki-sqwiki-translation
-(translation judgment), wikiterms (terminology/link conventions), wikiqa (the
-pre-delivery QA checklist). `skill_path` (translation + wikiterms) is
-concatenated into the system prompt of *every* normal translation and repair
-call, since both are always relevant. `qa_skill_path` (wikiqa) is loaded
-separately and appended *only* to a repair call
-(`skill_loader.build_repair_messages`'s `qa_skill` parameter) — the one case
-where `validate_wikitext` has already found a real defect, which is exactly
-when wikiqa's checklist becomes relevant. Most sections never fail
-validation, so most calls never pay wikiqa's token cost at all; measured
-against the real skill files, this cuts the system prompt on an ordinary
-translation call by about 29% (see **Benchmarking this change** below).
-
-**A compact, growing article-level terminology registry keeps unconfirmed
-renderings consistent across sections**, without the harness inventing any
-translation judgment of its own. `VerifiedFacts` (see
-`wiki_translation_harness/verification.py`) already carries confirmed
-link/template targets and, for a rewrite, the existing target article's own
-terminology (`sibling_links`) — all already scoped down to just the terms
-appearing in each individual chunk before being sent
-(`build_verified_facts_block`), not resent wholesale. On top of that,
-`established_renderings` now also tracks the model's own choices as they
-happen: whenever a chunk's own translated output uses `{{ill|display|en|
-Title}}` for a source-language term with no confirmed target-wiki sitelink,
-that specific rendering is recorded (first occurrence wins) and relayed —
-as a plain fact, not an instruction on how to translate — to every other
-chunk of the same article that later mentions the same term, so the second
-mention doesn't independently reinvent its own Albanian phrasing. Because
-chunks are dispatched worker-slot by worker-slot rather than all at once,
-this registry is already populated by the time most later chunks build
-their own `verified_facts_block`.
+- Loads the skill's `SKILL.md` files from disk and uses them as the system
+  prompt, with a short fixed frame saying "no tools in this call" (see
+  `skill_loader.py`). By default the skill is read from a pinned git
+  revision (`skill_git_ref: HEAD`) so uncommitted edits don't change a
+  running batch.
+- Sends `skill_path` (translation + `wikiterms`) on every call, and
+  `qa_skill_path` (`wikiqa`) only on repair calls, since that checklist is
+  only useful once a defect was found. This cuts the system prompt on a
+  normal call by about 29%.
+- Does the skill's live lookups itself and passes the results to the model
+  as plain facts.
+- Keeps a per-article terminology registry: when a chunk renders an
+  unlinked term as `{{ill|...}}`, later chunks mentioning the same term are
+  told to reuse that exact rendering.
 
 ## Setup
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-cp config.example.yaml config.yaml   # edit model/workers/skill_path as needed
-export WIKIMEDIA_CONTACT=you@example.com   # or set wikimedia_contact in config.yaml
-# Only needed for --provider openrouter/experiential (the default, claude_code,
-# uses your existing Claude Code CLI login instead — see "Choosing an engine"):
+cp config.example.yaml config.yaml
+export WIKIMEDIA_CONTACT=you@example.com   # required, or set wikimedia_contact in config.yaml
+# Only for the API-key engines:
 # export OPENROUTER_API_KEY=sk-or-...
 # export EXPLABS_API_KEY=xpl_...
 ```
 
-`wikimedia_contact` is required — Wikimedia's
-[User-Agent policy](https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy)
-requires automated requests to self-identify with contact info so the
-operator can be reached; the harness refuses to start without it (or an
-explicit `user_agent` override).
+`wikimedia_contact` is required by Wikimedia's
+[User-Agent policy](https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy).
+The harness refuses to start without it (or an explicit `user_agent`).
 
 ## Usage
 
 ```bash
-wiki-translation-harness --title "Paris"   # provider: claude_code, model: claude-sonnet-5 by default
-wiki-translation-harness --titles articles.txt --provider openrouter --model qwen/qwen3-235b-a22b
-wiki-translation-harness --category "Physics" --provider openrouter --model mistralai/mistral-large
+wiki-translation-harness --title "Paris"
+wiki-translation-harness --titles articles.txt
+wiki-translation-harness --category "Physics"
 wiki-translation-harness --file article.wiki
 wiki-translation-harness --directory raw_articles/
 ```
 
-**Source language is generic, not hardcoded to English.** Target language is
-a single run-wide setting (`target_lang` in config.yaml, default `sq`), but
-each title can carry its own source wiki — a `lang:Title` prefix
-(interwiki-link style) or a full Wikipedia URL, both in `--title` and in
-each line of a `--titles` file:
+The source language can be set per title with a `lang:Title` prefix or a
+full URL (also inside a `--titles` file). Without a prefix, `source_lang`
+from config.yaml is used. The target language is `target_lang` (default
+`sq`).
 
 ```bash
 wiki-translation-harness --title "sq:Gjergj Arianiti"
 wiki-translation-harness --title "https://sr.wikipedia.org/wiki/Ниш"
 ```
 
-With no prefix, `source_lang` from config.yaml is used. `--category` also
-accepts a `lang:Category` prefix.
+Useful flags: `--provider`, `--model`, `--workers`, `--force` (re-translate
+even if the output exists), `--sequential/--no-sequential` (one article at a
+time, default on), and `--no-cache` / `--no-validate` / `--no-repair` /
+`--no-live-validate`. Run with `--help` for the full list.
 
-Output is saved as `output/Article_Name.wiki` (UTF-8, no publishing), plus
-`output/Article_Name.report.md` (see **Reports** below). Rerun the exact
-same command to resume — articles with an existing output file are skipped,
-and any chunk already translated is served from the SQLite
-translation-memory cache (`cache/translation_memory.sqlite3`) instead of
-being re-sent to the model. Pass `--force` to re-translate regardless.
+**Resuming**: rerun the same command. Articles with an existing output file
+are skipped, and translated chunks come from the cache
+(`cache/translation_memory.sqlite3`).
 
-Logs: `logs/run.log` (all activity), `logs/errors.log` (errors only).
-Live counters: `stats.json`, updated after every section.
+## Output
 
-## Queue mode
+Written to `output_dir` (default `~/code/wiki-translation-queue/output`;
+set it to `output` for a local folder):
 
-**To translate "the next article" rather than a specific title, use the
-shared queue instead of `--title`.** `totranslate.txt` in
-[wiki-translation-queue](https://github.com/arianit/wiki-translation-queue)
-is the shared, cross-machine list of pending articles (one per line, URL or
-title, with a status field this repo's `queue_lib.py` updates in place —
-see that repo's README for the exact format). The `queue` subcommand claims
-and drains it:
+- `Article_Name.wiki`: the translated wikitext.
+- `Article_Name.report.md`: link/template verification tables, infobox
+  parameters, citation languages, which sections needed repair, a REWRITE
+  flag if the target article already exists, and (for English sources) a
+  ready-to-paste `{{Përkthyer nga}}` Talk-page block and edit summary.
+- `Article_Name.review-flags.md`: only if the semantic review pass left
+  unresolved findings (see **Model tiers**).
+- `needs_human_review.json`: articles withheld because a structural defect
+  could not be repaired.
 
-```bash
-wiki-translation-harness queue                       # up to 10 articles, defaults from config.yaml
-wiki-translation-harness queue --max-articles 1       # just the next pending line
-wiki-translation-harness queue --provider openrouter --model deepseek/deepseek-v3.2
-```
+Also: `logs/run.log`, `logs/errors.log`, and `stats.json` (live counters,
+including tokens and cost per model).
 
-Each run pulls the queue repo, claims the first line with no status field
-(a `CLAIMED` line older than `--stale-hours`, default 3, is treated as
-abandoned and reclaimed), translates it with the same pipeline `--title`
-uses, then marks the line `DONE` or `FAILED` and pushes. The `DONE`/`FAILED`
-status also records which engine actually ran, e.g.
-`DONE\tclaude-sonnet-5@claude_code` — this is the
-*effective* provider/model (reflecting a mid-run fallback-provider switch,
-see **Choosing an engine** below), not necessarily what `--provider`/
-`--model` started the run with. Because the claim is committed before
-translation starts, two machines draining the same queue at once don't pick
-the same article. `--queue-repo-dir` points at a local clone of the queue
-repo (default: see `DEFAULT_QUEUE_REPO_DIR` in `queue_runner.py`); add a
-new article by appending a line to `totranslate.txt` in that repo, not by
-passing `--title`.
+## Engines
 
-## Choosing an engine
+Choose with `--provider` or `provider:` in config.yaml:
 
-Five `--provider` values, selectable per run with no code change:
+| Provider | What it runs | Key needed | Cost reporting |
+|---|---|---|---|
+| `claude_code` (default) | `claude -p` with your Claude Code login | no | always $0.00 (not wired up yet) |
+| `openrouter` | OpenRouter API | `OPENROUTER_API_KEY` | from OpenRouter's pricing table |
+| `local` | any OpenAI-compatible server (llama.cpp, Ollama, LM Studio, vLLM) | no | $0.00 |
+| `experiential` | [Experiential Labs](https://platform.experientiallabs.ai/) (OpenAI-compatible) | `EXPLABS_API_KEY` | real per-call cost |
+| `opencode_go` | `opencode run` with its own login | no | real per-call tokens and cost |
 
-- **`claude_code`** (default) — runs `claude -p` under your existing Claude
-  Code CLI login/subscription. No API key needed. Cost currently always
-  reports as `$0.00` (the CLI's own JSON output does carry a real
-  `total_cost_usd` per call, but that isn't wired into the harness's
-  external per-token pricing-table cost model yet — see
-  `wiki_translation_harness/claude_code_client.py`).
-- **`openrouter`** — the original engine, unchanged. Requires
-  `openrouter_api_key` (or the `OPENROUTER_API_KEY` env var).
-- **`local`** — any local OpenAI-compatible server (llama.cpp server,
-  Ollama, LM Studio, vLLM, ...). See below.
-- **`experiential`** — [Experiential
-  Labs](https://platform.experientiallabs.ai/), a curated multi-model
-  gateway speaking the same OpenAI wire protocol as OpenRouter (it reuses
-  `OpenRouterClient`). Requires `experiential_api_key` (or the
-  `EXPLABS_API_KEY` env var). Unlike OpenRouter/local, it reports real
-  per-call cost: `usage.cost` is stamped on every response and read
-  directly, rather than computed from an external pricing table (its
-  pricing endpoint shape, if any, is unconfirmed — see
-  `wiki_translation_harness/openrouter.py`'s `fetch_pricing`).
-- **`opencode_go`** — runs `opencode run --format json` under the [OpenCode
-  Go](https://github.com/sst/opencode) CLI's own separate login/session. No
-  API key needed here either. This is the harness's default fallback target
-  when `claude_code` hits its own account-level session/spend limit (see
-  below) — a different binary with its own auth, so it's unaffected by
-  Claude Code's cap. Unlike the other CLI-based engine here, this reports
-  real per-call token counts and cost, read directly from the CLI's JSON
-  event stream (confirmed live against opencode v1.18.31 — see
-  `wiki_translation_harness/opencode_go_client.py`'s module docstring for
-  the full contract). One caveat surfaced by that same live check: `opencode
-  run` has no `--tools ""` equivalent, so unlike Claude Code's engine it may
-  run with full tool permissions unless you pin `opencode_go_agent` to a
-  locked-down agent (see `config.example.yaml`).
+If you change `--provider` without `--model`, a default model for that
+provider is picked (`claude-sonnet-5`, `deepseek/deepseek-v3.2`,
+`qwen3.8-27b`, or, for `opencode_go`, whatever opencode is configured to
+use).
 
-Switch with `--provider openrouter` / `--provider local` / `--provider
-opencode_go`, or set `provider:`
-in `config.yaml`. `--model`/`--workers`/caching/verification/post-processing
-all behave the same regardless of engine. If you switch `--provider` without
-also passing `--model`, `build_config()` picks a provider-appropriate
-default model rather than silently carrying over the other provider's
-model id.
+Caveat for `opencode_go`: `opencode run` has no way to turn tools off, so
+pin `opencode_go_agent` to a locked-down agent (see `config.example.yaml`).
 
-Adding a further engine later means adding one branch to
-`wiki_translation_harness/engines.py`'s `build_llm_client()` and a new client
-module implementing `chat_completion()`/`get_pricing_for()`/
-`fetch_pricing()`/`aclose()` (see `engines.LLMEngineClient`) — nothing in
-`translator.py`, `repair.py`, `pipeline.py`, or `benchmark.py` needs to
-change, since they only depend on that duck-typed contract. `experiential`
-took the even smaller path: since it speaks the same OpenAI-compatible wire
-protocol as `openrouter`, it needed no new client module at all, just a
-`resolve_llm_endpoint()`/`build_llm_client()` config branch plus the
-provider-aware insufficient-quota and cost handling described below.
-
-### Fallback on insufficient credits
-
-If the active provider rejects a call for lack of funds — or Claude Code
-hits its own account-level session/spend limit — the harness offers to
-switch engines mid-run instead of failing every remaining chunk — a
-distinct `InsufficientCreditsError`, not one of the retryable transient
-errors. The condition is detected differently per provider since it's
-signalled differently: OpenRouter uses a plain HTTP 402; Experiential Labs
-instead uses HTTP 429 (otherwise a routine retryable status) with the JSON
-error body's `code` field set to `insufficient_quota` — branching on `code`
-rather than the human-readable `message` text, which Experiential Labs'
-docs explicitly warn isn't stable (see `OpenRouterClient._insufficient_quota_error`
-in `openrouter.py`); Claude Code also uses HTTP 429 (`api_error_status`
-in its CLI's own JSON output), raised as `ClaudeCodeSessionLimitError` (see
-`claude_code_client.py`). For an interactive `--title`/`--titles`/`--category`/
-`--file`/`--directory` run it pauses the live progress table and asks; for
-`queue` mode (no interactive terminal) it switches automatically and just
-logs it. Either way the switch is one-way and sticks for the rest of that
-run.
-
-`--fallback-provider` (or `fallback_provider:` in config.yaml) picks the
-target; unset, it defaults to `opencode_go` when the active provider is
-`claude_code` (a separate binary/session, unaffected by Claude Code's own
-limit), otherwise `claude_code` (no API credits needed there). Set it to the
-same value as `--provider` to disable the offer entirely.
-
-## Local models
-
-Pass `--provider local` to route translation requests to any local
-OpenAI-compatible server — llama.cpp server, Ollama, LM Studio, vLLM, etc.
-— selectable per run, no code change needed. Everything else (`--model`,
-`--workers`, caching, verification, post-processing) behaves the same
-either way; local runs just skip the OpenRouter API-key check and always
-report `$0.00` cost.
-
-For example, this matches a llama.cpp server configured the same way as
-Pi's `~/.pi/agent/models.json`:
-
-```json
-{
-  "providers": {
-    "llama-cpp": {
-      "baseUrl": "http://127.0.0.1:8080/v1",
-      "api": "openai-completions",
-      "apiKey": "none",
-      "models": [{ "id": "qwen3-8b-q5-k-m" }]
-    }
-  }
-}
-```
-
-Run against it with:
+Example for a local llama.cpp server:
 
 ```bash
 wiki-translation-harness --title "Paris" --provider local \
   --base-url http://127.0.0.1:8080/v1 --model qwen3-8b-q5-k-m
 ```
 
-Or make it the default by adding to `config.yaml` instead of passing flags
-every time:
+or in config.yaml:
 
 ```yaml
 provider: local
@@ -306,220 +141,133 @@ local_base_url: http://127.0.0.1:8080/v1
 local_model: qwen3-8b-q5-k-m
 ```
 
-then just run `wiki-translation-harness --title "Paris"` — switch to another
-engine with `--provider claude_code` or `--provider openrouter` whenever you
-want. `local_api_key` can be left unset
-(most local servers, including llama.cpp server, ignore it).
+To add an engine, add a branch to `build_llm_client()` in `engines.py` and
+a client implementing `chat_completion()`, `get_pricing_for()`,
+`fetch_pricing()` and `aclose()`. Nothing else needs to change.
+
+### Fallback when credits run out
+
+If the provider reports insufficient credits (OpenRouter HTTP 402,
+Experiential Labs HTTP 429 with `code: insufficient_quota`, or Claude Code
+hitting its session/spend limit), the harness offers to switch engines for
+the rest of the run. It asks interactively, or switches automatically in
+`queue` mode.
+
+The target is `--fallback-provider`. By default it is `opencode_go` when
+running on `claude_code`, otherwise `claude_code`. Set it equal to
+`--provider` to disable the switch.
+
+## Model tiers
+
+All optional. With none set, one model does everything.
+
+- **Draft** (`model`, `provider`): ordinary text chunks.
+- **Complex** (`complex_model`, `complex_provider`): infoboxes, large
+  tables and dense reference lists go here instead.
+- **Review** (`review_model`, `review_provider`): after the article passes
+  structural checks, this model reads the whole translation next to the
+  source and looks for mistranslation, missing or invented facts, grammar
+  errors, and inconsistent names across sections. Findings are repaired up
+  to `review_max_repair_attempts` times. Unlike structural defects,
+  unresolved review findings do **not** block the output; they go into
+  `.review-flags.md` and the report.
+
+`review_model` defaults to `complex_model`, so setting a stronger complex
+model also turns on review. Providers inherit the same way (review →
+complex → main).
+
+## Queue mode
+
+To translate "the next article" from the shared list in
+[wiki-translation-queue](https://github.com/arianit/wiki-translation-queue)
+(`totranslate.txt`) instead of naming titles:
+
+```bash
+wiki-translation-harness queue                     # up to 10 articles
+wiki-translation-harness queue --max-articles 1
+wiki-translation-harness queue --provider openrouter --model deepseek/deepseek-v3.2
+```
+
+Each run pulls the queue repo, claims the first unclaimed line (commits and
+pushes the claim first, so two machines don't take the same article),
+translates it, then marks it `DONE` or `FAILED` along with the engine that
+actually ran (e.g. `DONE\tclaude-sonnet-5@claude_code`). A claim older than
+`--stale-hours` (default 3) is treated as abandoned. The clone location is
+`--queue-repo-dir` (default `~/code/wiki-translation-queue`).
 
 ## Fact verification
 
-The skill's own methodology assumes live tool access (batch Wikidata
-sitelink checks, curl-based template/parameter checks) that a single
-completion call doesn't have. The harness does this work itself
-(`wiki_translation_harness/verification.py`) during the planning phase, and
-hands the model **verified facts** as plain data alongside each section —
-never translation guidance, only what already exists:
+Done by the harness in `verification.py` and passed to the model as data,
+not instructions. Cached in `cache/verified_facts.sqlite3`.
 
-- **Link targets**: batch-checked against Wikidata sitelinks; confirmed
-  targets are given as `[[X]] -> confirmed as [[Y]]`. For links with no
-  target-wiki sitelink, the harness also checks how many *other* Wikipedia
-  language editions have an article for the concept — a mechanical proxy
-  for "distinct, notable topic worth an interwiki link" vs. "generic word,
-  better left unlinked" (e.g. "egg").
-- **Templates**: same check, plus — for infobox-shaped templates confirmed
-  present — the target wiki's *actual* parameter names, fetched from the
-  live template source. Several target-wiki infobox templates keep English
-  parameter names with only display labels localized; without this, a model
-  will invent translated parameter names that get silently dropped on
-  render.
-- **Existing target article**: if the article itself already has a
-  target-wiki sitelink, this is a rewrite, not a first translation — the
-  report flags it prominently, and the existing article's own wikilinks are
-  passed along as already-established terminology for the topic.
-- **Citation parameter names**: CS1 citation templates (`{{cite web}}`,
-  `{{cite book}}`, ...) use fixed English parameter names on essentially
-  every Wikipedia regardless of language — the model is told this
-  explicitly, since it's easy to mistranslate `|title=` → `|titulli=` etc.,
-  which the citation module then silently ignores as unrecognized.
+- **Links**: checked against Wikidata sitelinks. For terms with no
+  target-wiki article, the harness counts how many other languages have
+  one, as a hint for whether the term is worth an interwiki link.
+- **Templates**: checked for existence; for infoboxes, the target wiki's
+  real parameter names are fetched (many sq.wikipedia infoboxes keep English
+  parameter names, and models tend to invent translated ones).
+- **Existing article**: if the article already exists on the target wiki,
+  the run is flagged as a rewrite and that article's links are passed as
+  established terminology.
+- **Citation parameters**: the model is told CS1 templates (`{{cite web}}`
+  etc.) keep English parameter names on every wiki.
 
-All of this is cached persistently (`cache/verified_facts.sqlite3`) — the
-harness's own, growing equivalent of the skill's `sqwiki-verified.md`
-reference file, reused across the whole batch and future runs.
+## Deterministic fixes
 
-## Post-processing (deterministic fixes)
+Applied after translation, in `citation_language.py`:
 
-A few defects are common enough, and mechanically fixable enough, that the
-harness corrects them after translation rather than relying solely on model
-compliance with an instruction:
+- **Citation language**: adds a missing `|language=`, guessed from the
+  title or read from the cited page. The title wins if they disagree.
+- **Citation parameter names**: renames mistranslated CS1 names back to
+  English (`|titulli=` → `|title=`, `|botues=` → `|publisher=`, ...).
+- **Sfn/harvnb page parameters**: `|f=`/`|ff=` or a positional `f. 161`
+  become `|p=`/`|pp=`.
+- **Redundant `<ref>` around `{{sfn}}`**: `{{sfn}}`, `{{sfnp}}` and
+  `{{sfnm}}` create their own `<ref>`, so an extra wrapper nests refs and
+  breaks Cite on sq.wikipedia. Only bare wrappers are removed;
+  `{{harvnb}}` is left alone.
+- **Short-footnote dedup**: identical `{{sfn}}` citations translated in
+  different chunks can come back with slightly different `|ps=` text, which
+  breaks the shared anchor. All copies are made identical to the first.
 
-- **Citation language fill**: any citation missing `|language=` gets one —
-  guessed from the title, or (more reliably) by visiting the cited URL and
-  reading its declared language. When the two disagree, the title wins
-  (academic-publisher/DOI-resolver pages report their own UI language, not
-  the cited work's).
-- **Citation parameter name fix**: renames known mistranslated CS1 parameter
-  names back to English (`|titulli=` → `|title=`, `|botues=` → `|publisher=`,
-  etc.), covering inflected and numbered-variant forms.
-- **Sfn/harvnb parameter name fix**: `{{sfn}}`/`{{harvnb}}` only understand
-  positional params 1=author, 2=year — everything else must be named, so a
-  mistranslated `|f=`/`|ff=` (Albanian "faqe"/pages) or a positional value
-  like `f. 161` is rewritten to the named `|p=`/`|pp=` the template actually
-  reads.
-- **Redundant `<ref>` unwrap**: `{{sfn}}`/`{{sfnp}}`/`{{sfnm}}` already expand
-  to their own `<ref name="FOOTNOTE...">...</ref>` internally, so a model
-  wrapping one in an extra outer `<ref>...</ref>` nests a ref inside a ref —
-  confirmed live on sq.wikipedia to corrupt Cite's usage-tracking for the
-  auto-generated name. Only a *bare* wrapper (no `name=`, no other content)
-  is unwrapped; `{{harvnb}}`/`{{harv}}`/`{{harvp}}` don't self-wrap and are
-  left alone. Always on, not config-toggleable.
-- **Short-footnote dedup**: `{{sfn}}`/`{{harvnb}}` auto-generate a shared
-  anchor from author+year+page. The same source citation split across two
-  independently-translated chunks can come back with its `|ps=` quote
-  paraphrased slightly differently each time, which breaks that shared
-  anchor (MediaWiki requires byte-identical content across all uses). Every
-  occurrence sharing an identity is canonicalized to the first one.
-- **Leaked commentary detection**: a chunk-level validation check that
-  catches the model breaking character — either leaking the skill's
-  whole-article "end of file" attribution block into an individual section,
-  or fabricating a plausible-looking replacement when given too little real
-  content to translate. Treated as a validation failure, triggering the
-  same repair-then-fail path as a structural syntax error.
+Toggles: `fill_citation_languages`, `fix_citation_param_names`,
+`dedupe_short_footnotes`, `verify_links`. The two sfn fixes always run.
 
-Citation language fill, citation parameter name fix, short-footnote dedup,
-and link verification are individually toggleable in config.yaml
-(`fill_citation_languages`, `fix_citation_param_names`,
-`dedupe_short_footnotes`, `verify_links`). The sfn/harvnb parameter fix and
-the redundant-`<ref>` unwrap always run.
-
-## Hybrid model routing & semantic review
-
-Three model/provider tiers, each optional and independently configurable —
-the common case (nothing below set) is a single model on a single provider,
-exactly as before:
-
-- **Draft** (`model` / `provider`): translates ordinary body-text chunks.
-- **Complex** (`complex_model` / `complex_provider`): structurally complex
-  chunks (infoboxes, large tables, dense reference lists — see
-  `parser.classify_chunk_complexity`) are routed here instead, at draft
-  time. `complex_provider` only needs setting when it should differ from
-  `provider` (e.g. a cheap draft tier on `opencode_go`, complex chunks on a
-  stronger model via `claude_code`); left unset, complex chunks just use a
-  different model on the same client.
-- **Review** (`review_model` / `review_provider`): an independent
-  semantic-fidelity pass. Once an article's structural repair
-  (`max_assembly_repair_rounds`) passes clean, the whole assembled article
-  is handed to this model alongside the English source — for the first
-  time, with no memory of having drafted it — looking for mistranslation,
-  hallucinated or dropped facts, target-language grammar errors, and
-  named-entity/transliteration inconsistency across the whole article (the
-  one class of defect a translator working section-by-section cannot
-  self-audit). This is a genuinely different kind of check from `wikiqa`
-  (the same model/session grepping its own output for known defect
-  patterns) and from `benchmark`'s judge model (which ranks several
-  candidate translations against each other, not one translation against
-  its source).
-
-  Findings are localized to the chunk(s) they came from and repaired the
-  same way structural findings are (`repair_chunk`), capped at
-  `review_max_repair_attempts` rounds. Unlike an unresolved *structural*
-  defect (which withholds the `.wiki` file entirely —
-  `needs_human_review.json`), unresolved *review* findings do **not** block
-  delivery: the article is still saved, with a companion
-  `{title}.review-flags.md` alongside it and a "Semantic review" section in
-  the article's `.report.md`, since this harness never auto-publishes —
-  every output file is a human's paste-ready draft, and a fidelity concern
-  is a spot-check prompt, not a publish blocker.
-
-  `review_model` defaults to `complex_model` when unset (and
-  `review_provider` to `complex_provider`, then `provider`) — a config that
-  already set a stronger `complex_model` gets review "for free" on that
-  same model, since the two roles commonly share one higher-quality model.
-
-Only one extra provider client is ever built beyond the primary one, no
-matter how many of these are set to a different provider — every engine
-client accepts `model` as a per-call argument rather than binding to a
-fixed model, so two tiers on the *same* provider always share one client;
-a second client is only built for a tier that's on a genuinely different
-provider (see `engines.build_client_pool`).
-
-**Per-model spend**: `stats.json`'s `model_usage` field breaks tokens/cost
-down by the exact model id each call actually used (see
-`RunStats.record_usage`), so you can see e.g. how much the cheap draft
-model spent vs. the stronger complex/review model instead of only one
-lumped total. Both `wiki-translation-harness` and `wiki-translation-harness
-queue` also print a "Per-model usage" summary at the end of the run;
-`queue` aggregates it across every article processed that run (each
-article gets its own fresh stats internally — see
-`RunStats.merge_usage_from`).
-
-## Reports
-
-Every completed article gets `output/Article_Name.report.md`: link/template
-verification tables (confirmed and not-found, with cross-language notability
-counts), confirmed infobox parameters, citation language breakdown, which
-sections needed a repair pass, a REWRITE flag with reused terminology if the
-target article already exists, and — for English sources — the exact
-ready-to-paste `{{Përkthyer nga}}` Talk-page attribution block and edit
-summary the skill's own format specifies, built from the real revision ID
-and date already captured during fetch.
+Validation also catches leaked commentary (the model breaking character or
+inventing content for a near-empty chunk) and treats it as a defect to
+repair.
 
 ## Benchmark mode
 
-Compare several models on the same article:
+Translate one article with several models and compare runtime, tokens and
+cost. It uses `provider` from config.yaml (there is no `--provider` flag
+here):
 
 ```bash
 wiki-translation-harness benchmark --title "Paris" \
-  --model deepseek/deepseek-chat-v3-0324 \
-  --model qwen/qwen3-235b-a22b \
-  --model mistralai/mistral-large \
-  --model google/gemini-2.5-flash
-```
-
-Writes `quality/<model>/Article_Name.wiki` per model plus
-`quality/Article_Name_benchmark.json` with runtime, token usage, and
-estimated cost per model.
-
-### Blind evaluation with a judge model
-
-You can optionally have a separate judge model (not among the evaluated ones) rank the translations and provide detailed quality scores:
-
-```bash
-wiki-translation-harness benchmark --title "Paris" \
-  --model deepseek/deepseek-v3.2 \
-  --model qwen/qwen3-235b-a22b \
-  --model mistralai/mistral-large \
-  --model google/gemini-2.5-flash \
+  --model deepseek/deepseek-v3.2 --model google/gemini-2.5-flash \
   --judge-model anthropic/claude-sonnet-4.5
 ```
 
-The judge receives the original English article and the four Albanian translations labeled A‑D in random order, with no indication which model produced which translation. It evaluates each translation on five criteria (translation accuracy, Albanian language quality, terminology quality, MediaWiki quality, publication readiness), assigns scores 1‑10 per category, ranks them, and provides a detailed explanation and recommendation.
+Output goes to `quality/` (`--output` to change). With `--judge-model`
+(which must not be one of the compared models), a separate model receives
+the source and the translations labeled A, B, C... in random order, scores
+each 1 to 10 on five criteria, and ranks them. Results go to
+`quality/Article_Name/` (`comparison.md`, `evaluation/`, `mapping.json`).
+`--no-evaluation` skips the judge.
 
-Output directory structure:
-
-```
-quality/
-  Article_Name/
-    translations/          # model_a.wiki, model_b.wiki, … (labeled copies)
-    evaluation/
-      sonnet_judge.md      # full evaluation markdown
-      evaluation.json      # structured evaluation data
-    comparison.md          # combined benchmark metrics + judge scores
-    mapping.json           # which label corresponds to which model
-```
-
-Pass `--no-evaluation` to skip the evaluation step even if `--judge-model` is given.
+Example results for "Enji (deity)" are in
+[issue #1](https://github.com/arianit/wiki-translate-harness/issues/1):
+`deepseek/deepseek-v3.2` gave the best quality for the cost;
+`google/gemini-2.5-flash` matched its quality and was about 3× faster at
+twice the price.
 
 ## Reliability
 
-Every network call (OpenRouter, Wikidata, MediaWiki, citation URL fetches)
-is wrapped in a hard `asyncio.wait_for` deadline independent of the
-underlying HTTP client's own timeout — confirmed necessary in practice, as
-httpx's `timeout=` alone did not reliably fire under real network
-conditions and could otherwise hang an entire batch run indefinitely on a
-single stuck socket. The Claude Code CLI engine (`--provider claude_code`)
-isn't HTTP-based — its equivalent deadline is `subprocess.run`'s own
-`timeout=` (`request_timeout_s` in config.yaml), which reliably kills the
-subprocess on expiry.
+Every network call has a hard `asyncio.wait_for` deadline on top of the
+HTTP client's own timeout, because httpx's timeout alone did not always
+fire and could hang a whole batch. CLI-based engines are bounded by
+`request_timeout_s`.
 
 ## Tests
 
@@ -530,11 +278,9 @@ pytest
 
 ## Known limitations
 
-- The skill's live-research steps that the harness doesn't (yet) replicate
-  — nearby-sqwiki-article terminology searches beyond the current article's
-  own rewrite target, category-name translation judgment — remain purely
-  the model's own judgment call, same as an unverified fact.
-- Citation parameter mistranslation and short-footnote reconciliation cover
-  the CS1/CS2 template family and the patterns observed in practice; an
-  unrecognized Albanian rendering of a parameter name won't be caught until
-  added to `ALBANIAN_TO_ENGLISH_CS1_PARAMS`.
+- Some of the skill's live-research steps are not replicated (terminology
+  searches in nearby sq.wikipedia articles, category-name translation);
+  those stay the model's own judgment.
+- The parameter-name fixes only cover patterns seen so far. A new
+  mistranslated name won't be caught until added to
+  `ALBANIAN_TO_ENGLISH_CS1_PARAMS`.
