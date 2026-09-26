@@ -71,11 +71,11 @@ Pass the article's title exactly as it appears on English Wikipedia (the
 part after `/wiki/` in the address, with spaces instead of underscores):
 
 ```bash
-wiki-translation-harness --title "Prizren Fortress"
+wiki-translation-harness --title "Dresnik archaeological site"
 ```
 
-When it finishes you get `Prizren_Fortress.wiki` (the Albanian wikitext,
-ready to paste into sq.wikipedia) and `Prizren_Fortress.report.md` (what
+When it finishes you get `Dresnik_archaeological_site.wiki` (the Albanian wikitext,
+ready to paste into sq.wikipedia) and `Dresnik_archaeological_site.report.md` (what
 was checked and what to review) in the output folder (see **Output**).
 
 ### Translate several articles
@@ -85,10 +85,9 @@ Put one title per line in a text file. Empty lines and lines starting with
 
 ```text
 # articles.txt
-Butrint
-Gjirokastër
-Rugova Canyon
-https://en.wikipedia.org/wiki/Mount_Tomorr
+Drini Bridge
+Cërmjan
+https://en.wikipedia.org/wiki/Paleokastra_Castle
 ```
 
 ```bash
@@ -101,20 +100,21 @@ others are not affected.
 ### Translate every article in a category
 
 ```bash
-wiki-translation-harness --category "Mountains of Albania"
+wiki-translation-harness --category "Archaeological sites in Kosovo"
 ```
 
 This translates the articles directly in that English Wikipedia category
 (not its subcategories). Categories can be large, so check the category
-page first.
+page first. Articles that already exist on sq.wikipedia are translated
+too; their report marks them as a REWRITE.
 
 ### Translate from a language other than English
 
 Add a language code before the title, or paste the full Wikipedia link:
 
 ```bash
-wiki-translation-harness --title "de:Prizren"
-wiki-translation-harness --title "https://fr.wikipedia.org/wiki/Prizren"
+wiki-translation-harness --title "de:Kalivo"
+wiki-translation-harness --title "https://de.wikipedia.org/wiki/Konispol-Höhle"
 ```
 
 Without a prefix, `source_lang` from config.yaml is used (default `en`).
@@ -126,7 +126,7 @@ If you copied an article's source (from "Edit source" on Wikipedia) into a
 `.wiki` or `.txt` file, translate that file, or a whole folder of them:
 
 ```bash
-wiki-translation-harness --file Skanderbeg.wiki
+wiki-translation-harness --file Drini_Bridge.wiki
 wiki-translation-harness --directory my_articles/
 ```
 
@@ -135,7 +135,7 @@ The file name (minus the extension) is used as the article title.
 ### Choose a different model or engine
 
 ```bash
-wiki-translation-harness --title "Rugova Canyon" --provider openrouter --model deepseek/deepseek-v3.2
+wiki-translation-harness --title "Paleokastra Castle" --provider openrouter --model deepseek/deepseek-v3.2
 ```
 
 See **Engines** for the options.
@@ -195,7 +195,7 @@ pin `opencode_go_agent` to a locked-down agent (see `config.example.yaml`).
 Example for a local llama.cpp server:
 
 ```bash
-wiki-translation-harness --title "Butrint" --provider local \
+wiki-translation-harness --title "Drini Bridge" --provider local \
   --base-url http://127.0.0.1:8080/v1 --model qwen3-8b-q5-k-m
 ```
 
@@ -310,7 +310,7 @@ cost. It uses `provider` from config.yaml (there is no `--provider` flag
 here):
 
 ```bash
-wiki-translation-harness benchmark --title "Prizren Fortress" \
+wiki-translation-harness benchmark --title "Dresnik archaeological site" \
   --model deepseek/deepseek-v3.2 --model google/gemini-2.5-flash \
   --judge-model anthropic/claude-sonnet-4.5
 ```
