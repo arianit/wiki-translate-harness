@@ -1,5 +1,5 @@
-"""Benchmark mode: translate the same article with several OpenRouter models
-and record translation, runtime, token usage, and estimated cost for each,
+"""Benchmark mode: translate the same article with several models (on
+the configured provider) and record translation, runtime, token usage, and estimated cost for each,
 under quality/ so outputs can be compared for translation quality."""
 
 from __future__ import annotations

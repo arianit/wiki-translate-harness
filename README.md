@@ -179,7 +179,7 @@ complex → main).
 ## Queue mode
 
 To translate "the next article" from the shared list in
-[wiki-translation-queue](https://github.com/arianit/wiki-translation-queue)
+[wiki-translate-queue](https://github.com/arianit/wiki-translate-queue)
 (`totranslate.txt`) instead of naming titles:
 
 ```bash
