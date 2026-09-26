@@ -256,10 +256,10 @@ def benchmark(
     ),
     file: Optional[Path] = typer.Option(None, "--file", help="Local .wiki/.txt file instead of a title"),
     model: list[str] = typer.Option(
-        ..., "--model", help="OpenRouter model id to include; repeat for multiple models"
+        ..., "--model", help="Model id to include (for the configured provider); repeat for multiple models"
     ),
     judge_model: Optional[str] = typer.Option(
-        None, "--judge-model", help="OpenRouter model id for evaluation (must not be among the evaluated models)"
+        None, "--judge-model", help="Model id for evaluation (must not be among the evaluated models)"
     ),
     no_evaluation: bool = typer.Option(
         False, "--no-evaluation", help="Skip the evaluation step even if judge-model is provided"
@@ -267,7 +267,7 @@ def benchmark(
     config_path: Path = typer.Option(Path("config.yaml"), "--config", help="Path to config.yaml"),
     output: Path = typer.Option(Path("quality"), "--output", help="Directory for benchmark outputs"),
 ) -> None:
-    """Translate the same article with several OpenRouter models and compare
+    """Translate the same article with several models and compare
     translation, runtime, token usage, and estimated cost under quality/.
     
     If --judge-model is provided, a separate evaluation will be performed by that
