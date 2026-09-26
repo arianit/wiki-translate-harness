@@ -59,34 +59,100 @@ export WIKIMEDIA_CONTACT=you@example.com   # required, or set wikimedia_contact 
 [User-Agent policy](https://foundation.wikimedia.org/wiki/Policy:User-Agent_policy).
 The harness refuses to start without it (or an explicit `user_agent`).
 
-## Usage
+## Usage examples
+
+All commands are run from the repo folder, with the virtual environment
+from **Setup** active. With the default config, each article is translated
+from English Wikipedia into Albanian using Claude Code.
+
+### Translate one article
+
+Pass the article's title exactly as it appears on English Wikipedia (the
+part after `/wiki/` in the address, with spaces instead of underscores):
 
 ```bash
-wiki-translation-harness --title "Paris"
+wiki-translation-harness --title "Prizren Fortress"
+```
+
+When it finishes you get `Prizren_Fortress.wiki` (the Albanian wikitext,
+ready to paste into sq.wikipedia) and `Prizren_Fortress.report.md` (what
+was checked and what to review) in the output folder (see **Output**).
+
+### Translate several articles
+
+Put one title per line in a text file. Empty lines and lines starting with
+`#` are ignored:
+
+```text
+# articles.txt
+Butrint
+Gjirokastër
+Rugova Canyon
+https://en.wikipedia.org/wiki/Mount_Tomorr
+```
+
+```bash
 wiki-translation-harness --titles articles.txt
-wiki-translation-harness --category "Physics"
-wiki-translation-harness --file article.wiki
-wiki-translation-harness --directory raw_articles/
 ```
 
-The source language can be set per title with a `lang:Title` prefix or a
-full URL (also inside a `--titles` file). Without a prefix, `source_lang`
-from config.yaml is used. The target language is `target_lang` (default
-`sq`).
+Articles are translated one at a time by default, so if one fails the
+others are not affected.
+
+### Translate every article in a category
 
 ```bash
-wiki-translation-harness --title "sq:Gjergj Arianiti"
-wiki-translation-harness --title "https://sr.wikipedia.org/wiki/Ниш"
+wiki-translation-harness --category "Mountains of Albania"
 ```
 
-Useful flags: `--provider`, `--model`, `--workers`, `--force` (re-translate
-even if the output exists), `--sequential/--no-sequential` (one article at a
-time, default on), and `--no-cache` / `--no-validate` / `--no-repair` /
-`--no-live-validate`. Run with `--help` for the full list.
+This translates the articles directly in that English Wikipedia category
+(not its subcategories). Categories can be large, so check the category
+page first.
 
-**Resuming**: rerun the same command. Articles with an existing output file
-are skipped, and translated chunks come from the cache
-(`cache/translation_memory.sqlite3`).
+### Translate from a language other than English
+
+Add a language code before the title, or paste the full Wikipedia link:
+
+```bash
+wiki-translation-harness --title "de:Prizren"
+wiki-translation-harness --title "https://sr.wikipedia.org/wiki/Призрен"
+```
+
+Without a prefix, `source_lang` from config.yaml is used (default `en`).
+The output language is always `target_lang` (default `sq`).
+
+### Translate wikitext you already have
+
+If you copied an article's source (from "Edit source" on Wikipedia) into a
+`.wiki` or `.txt` file, translate that file, or a whole folder of them:
+
+```bash
+wiki-translation-harness --file Skanderbeg.wiki
+wiki-translation-harness --directory my_articles/
+```
+
+The file name (minus the extension) is used as the article title.
+
+### Choose a different model or engine
+
+```bash
+wiki-translation-harness --title "Rugova Canyon" --provider openrouter --model deepseek/deepseek-v3.2
+```
+
+See **Engines** for the options.
+
+### If a run stops halfway
+
+Run the same command again. Finished articles are skipped, and sections
+already translated are reused from the cache
+(`cache/translation_memory.sqlite3`), so you don't pay for them twice. To
+translate an article again from scratch, add `--force`.
+
+### Other flags
+
+`--workers` (how many sections are translated at once),
+`--no-sequential` (start all articles at once), and `--no-cache` /
+`--no-validate` / `--no-repair` / `--no-live-validate` to turn off
+individual steps. Run `wiki-translation-harness --help` for the full list.
 
 ## Output
 
@@ -129,7 +195,7 @@ pin `opencode_go_agent` to a locked-down agent (see `config.example.yaml`).
 Example for a local llama.cpp server:
 
 ```bash
-wiki-translation-harness --title "Paris" --provider local \
+wiki-translation-harness --title "Butrint" --provider local \
   --base-url http://127.0.0.1:8080/v1 --model qwen3-8b-q5-k-m
 ```
 
@@ -244,7 +310,7 @@ cost. It uses `provider` from config.yaml (there is no `--provider` flag
 here):
 
 ```bash
-wiki-translation-harness benchmark --title "Paris" \
+wiki-translation-harness benchmark --title "Prizren Fortress" \
   --model deepseek/deepseek-v3.2 --model google/gemini-2.5-flash \
   --judge-model anthropic/claude-sonnet-4.5
 ```
