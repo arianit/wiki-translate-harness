@@ -116,8 +116,11 @@ class OpenRouterClient:
         payload: dict[str, object] = {
             "model": model,
             "messages": messages,
-            "temperature": temperature,
         }
+        # Claude Sonnet 5 / Opus 4.7+ reject non-default sampling params with
+        # a 400, so only send temperature to non-Anthropic models.
+        if not model.startswith(("anthropic/", "claude-")):
+            payload["temperature"] = temperature
         if self.provider == "experiential":
             # OpenAI-standard attribution field (Experiential Labs' Cost API
             # docs: "Pass the OpenAI-standard `safety_identifier` on every

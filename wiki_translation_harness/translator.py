@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from wiki_translation_harness.cache import TranslationCache, compute_key
 from wiki_translation_harness.engines import LLMEngineClient
-from wiki_translation_harness.models import Chunk, ChunkStatus, Config, ModelPricing, RunStats, TranslationResult, ValidationResult
+from wiki_translation_harness.models import Chunk, ChunkStatus, Config, ModelPricing, RunStats, ValidationResult
 from wiki_translation_harness.openrouter import RetryCallback, run_completion
 from wiki_translation_harness.repair import repair_chunk
 from wiki_translation_harness.skill_loader import SkillContent, build_translation_messages
@@ -30,13 +30,6 @@ class ChunkOutcome:
     latency_s: float = 0.0
 
 
-def _accumulate(stats: RunStats, result: TranslationResult) -> None:
-    stats.tokens_in += result.prompt_tokens
-    stats.tokens_out += result.completion_tokens
-    stats.estimated_cost_usd += result.cost_usd
-    stats.translation_time_s += result.latency_s
-
-
 async def translate_chunk(
     chunk: Chunk,
     config: Config,
@@ -49,10 +42,15 @@ async def translate_chunk(
     verified_facts: VerifiedFacts | None = None,
     qa_skill: SkillContent | None = None,
     complex_pricing: ModelPricing | None = None,
+    complex_client: LLMEngineClient | None = None,
 ) -> ChunkOutcome:
-    # Hybrid-model routing: complex chunks use complex_model when configured
-    effective_model = config.complex_model if (config.complex_model and chunk.is_complex) else config.model
-    effective_pricing = complex_pricing if (config.complex_model and chunk.is_complex) else pricing
+    # Hybrid-model routing: complex chunks use complex_model (and, when the
+    # caller passed one, a distinct complex_client -- see
+    # engines.build_client_pool/config.resolve_complex_provider) when configured.
+    is_complex_routed = bool(config.complex_model) and chunk.is_complex
+    effective_model = config.complex_model if is_complex_routed else config.model
+    effective_pricing = complex_pricing if is_complex_routed else pricing
+    effective_client = complex_client if (is_complex_routed and complex_client is not None) else client
     facts_block = build_verified_facts_block(chunk.text, verified_facts) if verified_facts else ""
     facts_hash = hashlib.sha256(facts_block.encode("utf-8")).hexdigest()[:16] if facts_block else ""
 
@@ -81,8 +79,8 @@ async def translate_chunk(
         chunk.text,
         verified_facts_block=facts_block,
     )
-    result = await run_completion(client, effective_model, messages, config.temperature, effective_pricing, on_retry=on_retry)
-    _accumulate(stats, result)
+    result = await run_completion(effective_client, effective_model, messages, config.temperature, effective_pricing, on_retry=on_retry)
+    stats.record_usage(effective_model, result)
     total_prompt_tokens = result.prompt_tokens
     total_completion_tokens = result.completion_tokens
     total_latency = result.latency_s
@@ -98,7 +96,7 @@ async def translate_chunk(
             stats.repair_attempts += 1
             errors = format_errors(validation)
             repair_result = await repair_chunk(
-                client,
+                effective_client,
                 skill,
                 effective_model,
                 config.temperature,
@@ -112,7 +110,7 @@ async def translate_chunk(
                 on_retry=on_retry,
                 qa_skill=qa_skill,
             )
-            _accumulate(stats, repair_result)
+            stats.record_usage(effective_model, repair_result)
             total_prompt_tokens += repair_result.prompt_tokens
             total_completion_tokens += repair_result.completion_tokens
             total_latency += repair_result.latency_s

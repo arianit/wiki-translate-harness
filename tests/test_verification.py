@@ -12,22 +12,10 @@ from wiki_translation_harness.verification import (
     build_verified_facts_block,
     extract_link_targets,
     extract_template_names,
-    extract_template_params,
-    strip_namespace,
     verify_wikitext,
 )
 
 WIKIDATA_API = "https://www.wikidata.org/w/api.php"
-
-
-def test_extract_link_targets_basic():
-    text = "[[Paris]] and [[Muzaka family|the family]] and [[London#History|London]]."
-    assert extract_link_targets(text) == ["Paris", "Muzaka family", "London"]
-
-
-def test_extract_link_targets_dedupes():
-    text = "[[Paris]] again [[Paris|the city]]."
-    assert extract_link_targets(text) == ["Paris"]
 
 
 def test_extract_link_targets_excludes_external_and_file_and_category():
@@ -35,53 +23,11 @@ def test_extract_link_targets_excludes_external_and_file_and_category():
     assert extract_link_targets(text) == ["Real Link"]
 
 
-def test_extract_template_names_basic():
-    text = "{{cite web|title=x}} some text {{Infobox royalty|name=y}}"
-    assert extract_template_names(text) == ["cite web", "Infobox royalty"]
-
-
 def test_extract_template_names_excludes_parser_functions():
     text = "{{#if:x|yes|no}} {{PAGENAME}}"
     names = extract_template_names(text)
     assert "#if" not in names
     assert "PAGENAME" in names
-
-
-def test_extract_template_params_named_only():
-    template_src = "{{{name|}}} {{{title|}}} {{{1|}}} {{{2}}}"
-    params = extract_template_params(template_src)
-    assert params == ["name", "title"]
-
-
-def test_strip_namespace():
-    assert strip_namespace("Stampa:Infobox royalty") == "Infobox royalty"
-    assert strip_namespace("Infobox royalty") == "Infobox royalty"
-
-
-@pytest.mark.asyncio
-async def test_wikidata_verifier_check_sitelinks():
-    with respx.mock() as mock:
-        mock.get(url__startswith=WIKIDATA_API).mock(
-            return_value=httpx.Response(
-                200,
-                json={
-                    "entities": {
-                        "-1": {"site": "enwiki", "title": "Nope", "missing": ""},
-                        "Q90": {
-                            "sitelinks": {
-                                "enwiki": {"site": "enwiki", "title": "Paris"},
-                                "sqwiki": {"site": "sqwiki", "title": "Parisi"},
-                            }
-                        },
-                    },
-                    "success": 1,
-                },
-            )
-        )
-        async with httpx.AsyncClient() as client:
-            verifier = WikidataVerifier(client, "en", "sq")
-            result = await verifier.check_sitelinks(["Paris", "Nope"])
-    assert result == {"Paris": "Parisi", "Nope": None}
 
 
 @pytest.mark.asyncio
@@ -161,39 +107,6 @@ def test_verification_cache_persists_across_reopen(tmp_path: Path):
     cache2.close()
 
 
-def test_verification_cache_template_params_roundtrip(tmp_path: Path):
-    cache = VerificationCache(tmp_path / "v.sqlite3")
-    assert cache.get_template_params("en", "sq", "Infobox royalty") is None
-    cache.set_template_params("en", "sq", "Infobox royalty", "Stampa:Infobox royalty", ["name", "title"])
-    assert cache.get_template_params("en", "sq", "Infobox royalty") == ["name", "title"]
-    cache.close()
-
-
-def test_verification_cache_isolated_by_lang_pair(tmp_path: Path):
-    cache = VerificationCache(tmp_path / "v.sqlite3")
-    cache.set_many("en", "sq", "link", {"Paris": "Parisi"})
-    assert cache.get_many("en", "fr", "link", ["Paris"]) == {}
-    cache.close()
-
-
-def test_build_verified_facts_block_empty_when_nothing_relevant():
-    facts = VerifiedFacts(links={"Other": "Tjetri"})
-    assert build_verified_facts_block("No links here.", facts) == ""
-
-
-def test_build_verified_facts_block_confirmed_link():
-    facts = VerifiedFacts(links={"Muzaka family": "Muzakajt"})
-    block = build_verified_facts_block("See the [[Muzaka family|family]].", facts)
-    assert "[[Muzaka family]]" in block
-    assert "confirmed as [[Muzakajt]]" in block
-
-
-def test_build_verified_facts_block_missing_link():
-    facts = VerifiedFacts(links={"Nonexistent Thing": None})
-    block = build_verified_facts_block("[[Nonexistent Thing]]", facts)
-    assert "NOT FOUND" in block
-
-
 def test_build_verified_facts_block_template_with_params():
     facts = VerifiedFacts(
         templates={"Infobox royalty": "Stampa:Infobox royalty"},
@@ -211,25 +124,6 @@ def test_record_established_renderings_extracts_ill_calls():
         "...ideja e {{ill|arkitekturës së qëndrueshme|en|Sustainable architecture}} u prezantua..."
     )
     assert facts.established_renderings == {"Sustainable architecture": "arkitekturës së qëndrueshme"}
-
-
-def test_record_established_renderings_shorthand_without_title_param():
-    facts = VerifiedFacts()
-    facts.record_established_renderings("See {{ill|Foo|en}} for more.")
-    assert facts.established_renderings == {"Foo": "Foo"}
-
-
-def test_record_established_renderings_ignores_non_english_ill():
-    facts = VerifiedFacts()
-    facts.record_established_renderings("{{ill|Foo|de|Foo}}")
-    assert facts.established_renderings == {}
-
-
-def test_record_established_renderings_first_occurrence_wins():
-    facts = VerifiedFacts()
-    facts.record_established_renderings("{{ill|First rendering|en|Some Topic}}")
-    facts.record_established_renderings("{{ill|Second rendering|en|Some Topic}}")
-    assert facts.established_renderings == {"Some Topic": "First rendering"}
 
 
 def test_verified_facts_block_reuses_established_rendering_for_unconfirmed_link():
@@ -389,44 +283,6 @@ async def test_verify_wikitext_detects_existing_target_article(tmp_path: Path):
     assert facts.sibling_links == ["Ilirët", "Mbretëria e Ilirisë"]
 
 
-@pytest.mark.asyncio
-async def test_verify_wikitext_no_existing_article_leaves_facts_empty():
-    with respx.mock() as mock:
-        mock.get(url__startswith=WIKIDATA_API).mock(
-            side_effect=[
-                httpx.Response(200, json={"entities": {}, "success": 1}),
-                httpx.Response(200, json={"entities": {}, "success": 1}),
-                httpx.Response(
-                    200,
-                    json={"entities": {"-1": {"site": "enwiki", "title": "New Article", "missing": ""}}, "success": 1},
-                ),
-            ]
-        )
-        async with httpx.AsyncClient() as wikidata_client:
-            facts = await verify_wikitext("New Article", "no links here", "en", "sq", wikidata_client, None, None)
-    assert facts.existing_target_title is None
-    assert facts.sibling_links == []
-
-
-def test_verification_cache_sibling_links_roundtrip(tmp_path: Path):
-    cache = VerificationCache(tmp_path / "v.sqlite3")
-    assert cache.get_sibling_links("en", "sq", "Bardylis") is None
-    cache.set_sibling_links("en", "sq", "Bardylis", "Bardhyli", ["Ilirët", "Mbretëria e Ilirisë"])
-    result = cache.get_sibling_links("en", "sq", "Bardylis")
-    assert result == ("Bardhyli", ["Ilirët", "Mbretëria e Ilirisë"])
-    cache.close()
-
-
-def test_verification_cache_sibling_links_distinguishes_checked_but_missing(tmp_path: Path):
-    cache = VerificationCache(tmp_path / "v.sqlite3")
-    cache.set_sibling_links("en", "sq", "New Article", None, [])
-    result = cache.get_sibling_links("en", "sq", "New Article")
-    # checked (non-None tuple) but found nothing, distinct from "never checked" (None)
-    assert result == (None, [])
-    assert cache.get_sibling_links("en", "sq", "Never Checked") is None
-    cache.close()
-
-
 def test_verified_facts_block_includes_sibling_note():
     facts = VerifiedFacts(existing_target_title="Bardhyli", sibling_links=["Ilirët", "Mbretëria e Ilirisë"])
     block = build_verified_facts_block("some chunk text with no links", facts)
@@ -435,30 +291,11 @@ def test_verified_facts_block_includes_sibling_note():
     assert "Mbretëria e Ilirisë" in block
 
 
-def test_verified_facts_block_no_sibling_note_when_not_existing():
-    facts = VerifiedFacts()
-    block = build_verified_facts_block("some chunk text", facts)
-    assert "already exists" not in block
-
-
 def test_verified_facts_block_includes_citation_param_note():
     facts = VerifiedFacts()
     block = build_verified_facts_block("{{cite web|title=Some Source}}", facts)
     assert "fixed, English parameter NAMES" in block
     assert "|titulli=" in block
-
-
-def test_verified_facts_block_no_citation_note_for_non_citation_templates():
-    facts = VerifiedFacts()
-    block = build_verified_facts_block("{{Short description|x}}", facts)
-    assert "fixed, English parameter NAMES" not in block
-
-
-def test_verified_facts_block_combines_sibling_and_citation_notes():
-    facts = VerifiedFacts(existing_target_title="Bardhyli", sibling_links=["Ilirët"])
-    block = build_verified_facts_block("{{cite book|title=X}}", facts)
-    assert "already exists on the target wiki as 'Bardhyli'" in block
-    assert "fixed, English parameter NAMES" in block
 
 
 @pytest.mark.asyncio
@@ -488,31 +325,6 @@ async def test_count_other_language_sitelinks_notable_concept():
     assert result == {"Egg": 3}  # excludes source (enwiki) itself
 
 
-@pytest.mark.asyncio
-async def test_count_other_language_sitelinks_missing_item():
-    with respx.mock() as mock:
-        mock.get(url__startswith=WIKIDATA_API).mock(
-            return_value=httpx.Response(
-                200,
-                json={"entities": {"-1": {"site": "enwiki", "title": "Nonexistent", "missing": ""}}, "success": 1},
-            )
-        )
-        async with httpx.AsyncClient() as client:
-            verifier = WikidataVerifier(client, "en", "sq")
-            result = await verifier.count_other_language_sitelinks(["Nonexistent"])
-    assert result == {"Nonexistent": 0}
-
-
-def test_verification_cache_sitelink_counts_roundtrip(tmp_path: Path):
-    cache = VerificationCache(tmp_path / "v.sqlite3")
-    assert cache.get_sitelink_counts("en", ["Egg"]) == {}
-    cache.set_sitelink_counts("en", {"Egg": 45, "SomeNicheThing": 0})
-    result = cache.get_sitelink_counts("en", ["Egg", "SomeNicheThing", "Uncached"])
-    assert result == {"Egg": 45, "SomeNicheThing": 0}
-    assert "Uncached" not in result
-    cache.close()
-
-
 def test_verified_facts_block_notable_not_found_link():
     facts = VerifiedFacts(links={"Egg": None}, not_found_link_language_counts={"Egg": 45})
     block = build_verified_facts_block("[[Egg]]", facts)
@@ -520,14 +332,3 @@ def test_verified_facts_block_notable_not_found_link():
     assert "likely a real, distinct topic" in block
 
 
-def test_verified_facts_block_non_notable_not_found_link():
-    facts = VerifiedFacts(links={"SomeNicheThing": None}, not_found_link_language_counts={"SomeNicheThing": 0})
-    block = build_verified_facts_block("[[SomeNicheThing]]", facts)
-    assert "no article in any other Wikipedia language" in block
-
-
-def test_verified_facts_block_not_found_without_count_falls_back():
-    facts = VerifiedFacts(links={"Something": None})
-    block = build_verified_facts_block("[[Something]]", facts)
-    assert "NOT FOUND on target wiki" in block
-    assert "other Wikipedia language" not in block

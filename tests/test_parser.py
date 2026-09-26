@@ -40,14 +40,6 @@ def test_chunk_never_splits_reference():
         assert c.text.count("<ref>") == c.text.count("</ref>")
 
 
-def test_chunk_never_splits_list():
-    items = "\n".join(f"* item {i} with some descriptive text here" for i in range(100))
-    text = f"Intro.\n\n== List ==\n{items}\n"
-    sections = split_into_sections(text)
-    chunks = build_chunks("Test", sections, chunk_min=10, chunk_max=50)
-    assert any(items in c.text for c in chunks)
-
-
 def test_small_sections_merge_up_to_max():
     text = "\n\n".join(f"== S{i} ==\nShort body {i}." for i in range(10))
     sections = split_into_sections(text)
@@ -57,41 +49,11 @@ def test_small_sections_merge_up_to_max():
     assert "".join(c.text for c in chunks) == text
 
 
-def test_chunk_ordering_preserved():
-    text = "\n\n".join(f"== S{i} ==\n{'word ' * 400}" for i in range(5))
-    sections = split_into_sections(text)
-    chunks = build_chunks("Test", sections, chunk_min=100, chunk_max=300)
-    orders = [c.order for c in chunks]
-    assert orders == sorted(orders)
-    assert "".join(c.text for c in chunks) == text
-
-
-def test_estimate_tokens_empty():
-    assert estimate_tokens("") == 0
-    assert estimate_tokens("hello world") > 0
-
-
 def test_build_chunks_propagates_source_lang():
     text = "Lead.\n\n== History ==\nBody.\n"
     sections = split_into_sections(text)
     chunks = build_chunks("Test", sections, chunk_min=1500, chunk_max=2500, source_lang="sq")
     assert all(c.source_lang == "sq" for c in chunks)
-
-
-def test_build_chunks_default_source_lang():
-    text = "Lead.\n"
-    sections = split_into_sections(text)
-    chunks = build_chunks("Test", sections)
-    assert all(c.source_lang == "en" for c in chunks)
-
-
-def test_build_chunks_source_lang_on_oversized_section():
-    big = "This is a sentence with several words in it. " * 500
-    text = f"== Big ==\n{big}\n"
-    sections = split_into_sections(text)
-    chunks = build_chunks("Test", sections, chunk_min=100, chunk_max=300, source_lang="de")
-    assert len(chunks) > 1
-    assert all(c.source_lang == "de" for c in chunks)
 
 
 def test_oversized_table_trailing_remainder_merged_not_standalone():

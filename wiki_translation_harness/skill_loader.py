@@ -74,9 +74,9 @@ end-of-file concerns itself, outside of this request. Adding that block to \
 an individual section would corrupt the reassembled article by inserting it \
 mid-document.
 
-Output ONLY the translated MediaWiki wikitext for the given input section, \
-nothing more and nothing less. No commentary, no explanation, no markdown \
-code fences, no preamble or sign-off, no file-level framing.
+Your whole response is inserted verbatim into the reassembled article, so \
+respond with the translated MediaWiki wikitext for this section and nothing \
+else.
 """
 
 _REPAIR_FRAME = """\
@@ -86,13 +86,12 @@ convention context. A previous translation pass produced MediaWiki wikitext \
 that failed mechanical validation (unbalanced templates, links, tables, \
 references, or comments).
 
-Fix ONLY the listed structural syntax errors. Do not re-translate, do not \
-change wording, do not alter meaning, and do not touch anything that is not \
-implicated by the listed errors. You have no internet access or tools in \
-this call.
+Fix the listed structural syntax errors by changing only the markup they \
+implicate; keep all wording exactly as it is. You have no internet access \
+or tools in this call.
 
-Output ONLY the corrected MediaWiki wikitext. No commentary, no explanation, \
-no markdown code fences, no preamble or sign-off.
+Your whole response replaces the section verbatim, so respond with the \
+corrected MediaWiki wikitext and nothing else.
 """
 
 

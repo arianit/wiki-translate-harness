@@ -14,7 +14,7 @@ from wiki_translation_harness.openrouter import OpenRouterClient, OpenRouterErro
 
 EVALUATION_CRITERIA = """
 You are an expert Albanian Wikipedia editor and translator evaluator.
-Your task is to evaluate the quality of four Albanian translations of an English Wikipedia article.
+Your task is to evaluate the quality of several Albanian translations of an English Wikipedia article.
 
 ## Evaluation Criteria
 
@@ -51,11 +51,11 @@ You must produce a structured evaluation with two parts:
 
 ### Part 1: Markdown summary
 Provide a clear markdown evaluation with:
-- Scores for each translation (A, B, C, D) for each category (1-10).
+- Scores for each translation (by its label) for each category (1-10).
 - Overall score per translation (1-10).
 - Ranking from best to worst (e.g., "A > C > B > D").
 - Detailed explanations for each translation's strengths and weaknesses.
-- Recommendation which translation model (based solely on labels A-D) would be best for English → Albanian Wikipedia translation in general, and why.
+- Recommendation which translation model (based solely on the labels) would be best for English → Albanian Wikipedia translation in general, and why.
 
 ### Part 2: JSON data
 After the markdown, include a JSON code block with the following structure:
@@ -64,12 +64,12 @@ After the markdown, include a JSON code block with the following structure:
 {
   "scores": {
     "A": {
-      "translation_accuracy": 9,
-      "albanian_quality": 8,
-      "terminology_quality": 9,
-      "mediawiki_quality": 7,
-      "publication_readiness": 8,
-      "overall": 8.5
+      "translation_accuracy": <1-10>,
+      "albanian_quality": <1-10>,
+      "terminology_quality": <1-10>,
+      "mediawiki_quality": <1-10>,
+      "publication_readiness": <1-10>,
+      "overall": <1-10>
     },
     "B": { ... },
     ...
@@ -132,6 +132,7 @@ def build_evaluation_prompt(
         translation_texts.append(f"## Translation {label}\n\n```wikitext\n{wikitext}\n```")
     
     translations_block = "\n\n".join(translation_texts)
+    label_list = ", ".join(sorted(translations))
     
     user_content = f"""# Albanian Wikipedia Translation Evaluation
 
@@ -141,9 +142,9 @@ def build_evaluation_prompt(
 {source_english}
 ```
 
-## Albanian Translations (labels A, B, C, D)
+## Albanian Translations (labels {label_list})
 
-The four translations are presented in random order.
+The {len(translations)} translations are presented in random order.
 
 {translations_block}
 

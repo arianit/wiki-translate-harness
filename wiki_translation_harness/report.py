@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from wiki_translation_harness.models import ArticleSource, Chunk, ChunkStatus
+from wiki_translation_harness.models import ArticleSource, Chunk, ChunkStatus, ValidationIssue
 from wiki_translation_harness.output import sanitize_filename
 from wiki_translation_harness.verification import VerifiedFacts
 
@@ -66,6 +66,12 @@ class ArticleReportData:
     chunks: list[Chunk]
     facts: VerifiedFacts
     citation_languages_filled: dict[str, str] = field(default_factory=dict)
+    # Set only when the run's semantic review pass (pipeline.run_review_pass)
+    # was enabled for this article. review_findings is whatever remained
+    # unresolved after its repair-attempt cap -- empty means either the
+    # review pass found nothing, or every finding got fixed.
+    review_model: str | None = None
+    review_findings: list[ValidationIssue] = field(default_factory=list)
 
 
 def _language_breakdown(translated_text: str) -> dict[str, int]:
@@ -184,6 +190,25 @@ def build_article_report(data: ArticleReportData, assembled_text: str) -> str:
             f"- {len(repaired)} of {len(data.chunks)} section(s) needed a syntax repair "
             "pass before validating cleanly — worth a manual skim of those sections."
         )
+        lines.append("")
+
+    if data.review_model:
+        lines.append("## Semantic review\n")
+        if data.review_findings:
+            lines.append(
+                f"Reviewed by `{data.review_model}`; {len(data.review_findings)} finding(s) "
+                "remained unresolved after the review repair-attempt cap — spot-check before "
+                "publishing.\n"
+            )
+            lines.append("| severity | explanation | snippet |")
+            lines.append("|---|---|---|")
+            for issue in data.review_findings:
+                finding = issue.as_finding()
+                snippet = (finding["snippet"] or "").replace("|", "\\|").replace("\n", " ")
+                explanation = finding["explanation"].replace("|", "\\|")
+                lines.append(f"| {finding['severity']} | {explanation} | `{snippet}` |")
+        else:
+            lines.append(f"Reviewed by `{data.review_model}` — no unresolved findings.")
         lines.append("")
 
     attribution_block = build_attribution_block(source)

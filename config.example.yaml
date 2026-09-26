@@ -39,6 +39,41 @@ validate: true
 repair: true
 max_repair_attempts: 2
 
+# Optional hybrid model/provider tiers -- see README.md "Hybrid model
+# routing & semantic review" for the full picture. All unset by default:
+# everything below uses `model`/`provider` above, exactly as if these
+# didn't exist.
+#
+# complex_model: routes structurally complex chunks (infoboxes, large
+# tables, dense reference lists) to a different model at draft time.
+# complex_provider only needs setting when it should differ from
+# `provider` above; unset, complex chunks just use a different model on
+# the same client.
+# complex_model: claude-sonnet-5
+# complex_provider: claude_code
+#
+# review_model: an independent semantic-fidelity pass over the whole
+# assembled article (after structural repair passes clean), looking for
+# mistranslation, hallucinated/dropped facts, grammar errors, and
+# cross-article transliteration inconsistency -- defects a structural
+# validator can't see. Defaults to complex_model when unset (and
+# complex_model is set); review_provider defaults to complex_provider,
+# then provider. Unresolved findings after review_max_repair_attempts
+# don't block delivery -- see review_queue.record_review_flags.
+# review_model: claude-sonnet-5
+# review_provider: claude_code
+# review_max_repair_attempts: 2
+#
+# Full example of the 3-tier "cheap draft, strong complex/review" pattern
+# this was designed for -- cheap draft on opencode_go's own separate login,
+# stronger model on claude_code for both complex chunks and review (review
+# left unset so it inherits complex_model/complex_provider):
+#   provider: opencode_go
+#   model: opencode-go/deepseek-v4.1-flash   # confirm against `opencode models` -- catalog depends on your own opencode auth
+#   complex_model: claude-sonnet-5
+#   complex_provider: claude_code
+#   fallback_provider: claude_code   # auto-switch target if opencode_go hits its own session/rate limit
+
 source_lang: en
 target_lang: sq
 source_wiki_api: https://en.wikipedia.org/w/api.php
@@ -108,9 +143,16 @@ openrouter_base_url: https://openrouter.ai/api/v1
 # binary to invoke (override if it's not on PATH); claude_code_permission_mode
 # is passed straight to `claude -p --permission-mode` (defense in depth —
 # every call already runs with --tools "" disabling all tool use, so there's
-# nothing for a permission prompt to fire on either way).
+# nothing for a permission prompt to fire on either way). claude_code_effort
+# (low/medium/high/xhigh/max) is passed straight to `claude -p --effort` —
+# controls thinking depth/token spend, same knob as the Messages API's
+# output_config.effort. Defaults to "medium" (not the CLI's own "high"
+# default): this harness's per-chunk translate/repair/review calls are
+# short, well-specified, single-section tasks, not long-horizon agentic
+# work. Set to null to omit the flag and let the CLI use its own default.
 # claude_code_cli_path: claude
 # claude_code_permission_mode: bypassPermissions
+# claude_code_effort: medium
 
 # Used only when provider: opencode_go. opencode_go_cli_path is the
 # `opencode` binary to invoke (override if it's not on PATH). No separate

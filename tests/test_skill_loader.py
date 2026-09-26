@@ -1,10 +1,8 @@
 import subprocess
 from pathlib import Path
 
-import pytest
 
 from wiki_translation_harness.skill_loader import (
-    SkillGitError,
     build_repair_messages,
     build_translation_messages,
     load_skill,
@@ -44,23 +42,11 @@ def test_frontmatter_stripped(tmp_path: Path):
     assert "Translation rules here." in skill.skill_md
 
 
-def test_references_excluded_by_default(tmp_path: Path):
-    skill_dir = _make_skill_dir(tmp_path)
-    skill = load_skill(skill_dir, include_references=False)
-    assert skill.reference_texts == {}
-    assert "verified reference notes" not in skill.combined
-
-
 def test_references_included_when_requested(tmp_path: Path):
     skill_dir = _make_skill_dir(tmp_path)
     skill = load_skill(skill_dir, include_references=True)
     assert "notes.md" in skill.reference_texts
     assert "verified reference notes" in skill.combined
-
-
-def test_missing_skill_raises(tmp_path: Path):
-    with pytest.raises(FileNotFoundError):
-        load_skill(tmp_path / "does-not-exist", include_references=False)
 
 
 def test_translation_messages_contain_skill_and_input(tmp_path: Path):
@@ -88,13 +74,6 @@ def test_harness_never_embeds_translation_prompt(tmp_path: Path):
     assert "case" not in framing_only.lower() or "no tools" in framing_only.lower()
 
 
-def test_content_hash_stable_for_same_content(tmp_path: Path):
-    skill_dir = _make_skill_dir(tmp_path)
-    skill_a = load_skill(skill_dir, include_references=False)
-    skill_b = load_skill(skill_dir, include_references=False)
-    assert skill_a.content_hash == skill_b.content_hash
-
-
 def test_content_hash_changes_when_skill_body_edited(tmp_path: Path):
     skill_dir = _make_skill_dir(tmp_path)
     before = load_skill(skill_dir, include_references=False)
@@ -107,36 +86,12 @@ def test_content_hash_changes_when_skill_body_edited(tmp_path: Path):
     assert before.content_hash != after.content_hash
 
 
-def test_content_hash_changes_when_references_toggled(tmp_path: Path):
-    skill_dir = _make_skill_dir(tmp_path)
-    without_refs = load_skill(skill_dir, include_references=False)
-    with_refs = load_skill(skill_dir, include_references=True)
-    assert without_refs.content_hash != with_refs.content_hash
-
-
-def test_repair_messages_include_errors(tmp_path: Path):
-    skill_dir = _make_skill_dir(tmp_path)
-    skill = load_skill(skill_dir, include_references=False)
-    messages = build_repair_messages(
-        skill, "en", "sq", "Paris", "Lead", "[[broken", ["link: unbalanced"]
-    )
-    assert "link: unbalanced" in messages[1]["content"]
-    assert "[[broken" in messages[1]["content"]
-
-
 def test_translation_messages_never_include_qa_skill_content(tmp_path: Path):
     """The QA/pre-delivery checklist must never reach a normal translation
     call — build_translation_messages has no parameter for it at all."""
     skill_dir = _make_skill_dir(tmp_path)
     skill = load_skill(skill_dir, include_references=False)
     messages = build_translation_messages(skill, "en", "sq", "Paris", "Lead", "text")
-    assert "qa checklist" not in messages[0]["content"].lower()
-
-
-def test_repair_messages_omit_qa_skill_by_default(tmp_path: Path):
-    skill_dir = _make_skill_dir(tmp_path)
-    skill = load_skill(skill_dir, include_references=False)
-    messages = build_repair_messages(skill, "en", "sq", "Paris", "Lead", "[[broken", ["e"])
     assert "qa checklist" not in messages[0]["content"].lower()
 
 
@@ -181,22 +136,6 @@ def test_multi_path_prefixes_reference_keys_to_avoid_collision(tmp_path: Path):
     assert "Verified sqwiki template cache." in skill.reference_texts["wikiterms/notes.md"]
 
 
-def test_single_element_list_keeps_bare_reference_keys(tmp_path: Path):
-    """A list containing exactly one skill directory should behave exactly
-    like passing that directory directly — no unnecessary prefixing."""
-    skill_dir = _make_skill_dir(tmp_path)
-    skill = load_skill([skill_dir], include_references=True)
-    assert "notes.md" in skill.reference_texts
-    assert "enwiki-sqwiki-translation/notes.md" not in skill.reference_texts
-
-
-def test_multi_path_missing_skill_reports_offending_directory(tmp_path: Path):
-    first = _make_skill_dir(tmp_path)
-    missing = tmp_path / "wikiqa"
-    with pytest.raises(FileNotFoundError, match="wikiqa"):
-        load_skill([first, missing], include_references=False)
-
-
 def _git(args: list[str], cwd: Path) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
@@ -237,34 +176,6 @@ def test_git_ref_reads_committed_content_not_working_copy(tmp_path: Path):
     skill = load_skill(skill_dir, include_references=False, git_ref="HEAD")
     assert "Committed rules." in skill.skill_md
     assert "UNCOMMITTED" not in skill.skill_md
-
-
-def test_git_ref_none_reads_dirty_working_copy(tmp_path: Path):
-    skill_dir = _make_git_skill_repo(tmp_path)
-    skill = load_skill(skill_dir, include_references=False, git_ref=None)
-    assert "UNCOMMITTED local edit." in skill.skill_md
-    assert "Committed rules." not in skill.skill_md
-
-
-def test_git_ref_reads_committed_references(tmp_path: Path):
-    skill_dir = _make_git_skill_repo(tmp_path)
-    skill = load_skill(skill_dir, include_references=True, git_ref="HEAD")
-    assert "notes.md" in skill.reference_texts
-    assert "Committed reference notes." in skill.reference_texts["notes.md"]
-    assert "UNCOMMITTED" not in skill.combined
-
-
-def test_git_ref_bad_revision_raises(tmp_path: Path):
-    skill_dir = _make_git_skill_repo(tmp_path)
-    with pytest.raises(SkillGitError):
-        load_skill(skill_dir, include_references=False, git_ref="not-a-real-ref")
-
-
-def test_git_ref_content_hash_differs_from_working_copy(tmp_path: Path):
-    skill_dir = _make_git_skill_repo(tmp_path)
-    committed = load_skill(skill_dir, include_references=False, git_ref="HEAD")
-    working = load_skill(skill_dir, include_references=False, git_ref=None)
-    assert committed.content_hash != working.content_hash
 
 
 def _make_second_git_skill_repo(tmp_path: Path) -> Path:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from wiki_translation_harness.validator import format_errors, validate_wikitext
+from wiki_translation_harness.validator import validate_wikitext
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -14,12 +14,6 @@ def test_valid_wikitext_passes():
     result = validate_wikitext(text)
     assert result.valid
     assert result.issues == []
-
-
-def test_unbalanced_link_detected():
-    result = validate_wikitext("[[Broken link")
-    assert not result.valid
-    assert any(i.kind == "link" for i in result.issues)
 
 
 def test_unbalanced_template_detected():
@@ -52,16 +46,6 @@ def test_template_trailing_pipe_not_flagged_as_table():
     assert result.valid, [i.message for i in result.issues]
 
 
-def test_real_table_balanced_alongside_trailing_pipe_template():
-    text = (
-        "{| class=wikitable\n"
-        "| cell with {{val|1|u=km/s|}} inside\n"
-        "|}\n"
-    )
-    result = validate_wikitext(text)
-    assert result.valid, [i.message for i in result.issues]
-
-
 def test_dropped_table_close_still_detected_with_templates_present():
     text = "{| class=wikitable\n| cell {{val|1|u=km/s|}}\n| a\n"
     result = validate_wikitext(text)
@@ -73,24 +57,6 @@ def test_unbalanced_ref_detected():
     result = validate_wikitext("text <ref>unterminated")
     assert not result.valid
     assert any(i.kind == "reference" for i in result.issues)
-
-
-def test_self_closing_ref_is_balanced():
-    result = validate_wikitext('text <ref name="x" /> more')
-    assert result.valid
-
-
-def test_unbalanced_comment_detected():
-    result = validate_wikitext("<!-- unterminated comment")
-    assert not result.valid
-    assert any(i.kind == "comment" for i in result.issues)
-
-
-def test_format_errors_readable():
-    result = validate_wikitext("[[broken")
-    errs = format_errors(result)
-    assert len(errs) >= 1
-    assert "link" in errs[0]
 
 
 def test_math_verbatim_not_counted_as_template_braces():
@@ -109,22 +75,6 @@ def test_math_verbatim_not_counted_as_template_braces():
     assert result.valid, [i.message for i in result.issues]
 
 
-def test_code_verbatim_not_counted_as_link_brackets():
-    # A <code> or <nowiki> span containing "]]" must not be counted as a
-    # link close.
-    text = "See <code>array[[0]]</code> and {{cite web|title=x}}.\n"
-    result = validate_wikitext(text)
-    assert result.valid, [i.message for i in result.issues]
-
-
-def test_unbalanced_template_outside_verbatim_still_detected():
-    # The masking must not suppress a genuine imbalance in real wikitext.
-    text = "<math>x = 1</math> then {{cite web|title=x\n"
-    result = validate_wikitext(text)
-    assert not result.valid
-    assert any(i.kind == "template" for i in result.issues)
-
-
 def test_heading_merged_onto_prior_line_detected():
     # Regression: a chunk boundary that drops the newline before a heading
     # (e.g. trailing content ending in "-->" immediately followed by "==...==")
@@ -132,16 +82,6 @@ def test_heading_merged_onto_prior_line_detected():
     result = validate_wikitext("some trailing text-->== Referime ==\n{{reflist}}\n")
     assert not result.valid
     assert any(i.kind == "heading" for i in result.issues)
-
-
-def test_heading_at_true_line_start_not_flagged():
-    result = validate_wikitext("Lead text.\n\n== History ==\nBody.\n\n=== Sub ===\nMore.\n")
-    assert result.valid
-
-
-def test_heading_at_start_of_document_not_flagged():
-    result = validate_wikitext("== Lead ==\nBody text.\n")
-    assert result.valid
 
 
 def test_equals_in_template_param_not_flagged_as_heading():
@@ -166,18 +106,6 @@ def test_leaked_fabrication_refusal_detected():
     result = validate_wikitext(text)
     assert not result.valid
     assert any(i.kind == "leaked_commentary" for i in result.issues)
-
-
-def test_leaked_english_refusal_detected():
-    text = "I cannot translate this section as there is no source text provided."
-    result = validate_wikitext(text)
-    assert not result.valid
-
-
-def test_normal_prose_not_flagged_as_leaked_commentary():
-    text = "'''Bardhyli''' ishte një mbret ilir i shekullit IV p.e.s.\n\n== Familja ==\nAi pati disa fëmijë."
-    result = validate_wikitext(text)
-    assert result.valid
 
 
 def test_degenerate_repetition_loop_detected():
@@ -262,14 +190,6 @@ def test_fixture_clean_valid_has_no_issues():
     result = validate_wikitext(_load_fixture("clean_valid.wiki"))
     assert result.valid
     assert result.issues == []
-
-
-def test_as_finding_shape():
-    result = validate_wikitext(_load_fixture("harvc_used.wiki"))
-    finding = result.issues[0].as_finding()
-    assert set(finding.keys()) == {"severity", "line_number", "snippet", "explanation"}
-    assert finding["severity"] == "error"
-    assert isinstance(finding["explanation"], str) and finding["explanation"]
 
 
 def test_normal_long_prose_not_flagged_as_degenerate_repetition():

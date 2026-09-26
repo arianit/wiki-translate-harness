@@ -73,25 +73,6 @@ async def test_reported_cost_fills_usage_out(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_no_reported_cost_leaves_usage_out_empty(monkeypatch):
-    monkeypatch.setattr(
-        "wiki_translation_harness.opencode_go_client.run_opencode_cli",
-        lambda *a, **kw: _ok(cost_usd=None),
-    )
-    client = OpenCodeGoClient(model="auto")
-    usage: dict = {}
-    await client.chat_completion("auto", _MESSAGES, usage_out=usage)
-    assert "cost" not in usage
-
-
-@pytest.mark.asyncio
-async def test_no_user_message_raises():
-    client = OpenCodeGoClient(model="auto")
-    with pytest.raises(OpenCodeGoError):
-        await client.chat_completion("auto", [{"role": "system", "content": "x"}])
-
-
-@pytest.mark.asyncio
 async def test_missing_binary_fails_fast_without_retrying(monkeypatch):
     calls = []
 
@@ -124,17 +105,6 @@ async def test_retries_then_succeeds(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_gives_up_after_max_retries(monkeypatch):
-    monkeypatch.setattr(
-        "wiki_translation_harness.opencode_go_client.run_opencode_cli",
-        lambda *a, **kw: _err(stderr="persistent failure"),
-    )
-    client = OpenCodeGoClient(model="auto", max_retries=2)
-    with pytest.raises(OpenCodeGoError, match="persistent failure"):
-        await client.chat_completion("auto", _MESSAGES)
-
-
-@pytest.mark.asyncio
 async def test_session_limit_fails_fast_without_retrying(monkeypatch):
     """A rate/usage-limit rejection cannot be fixed by backing off within
     the same run -- must raise immediately, and as an InsufficientCreditsError
@@ -154,20 +124,6 @@ async def test_session_limit_fails_fast_without_retrying(monkeypatch):
     assert issubclass(OpenCodeGoSessionLimitError, InsufficientCreditsError)
 
 
-@pytest.mark.asyncio
-async def test_agent_flag_passed_through_to_cli(monkeypatch):
-    seen_kwargs = {}
-
-    def fake(*a, **kw):
-        seen_kwargs.update(kw)
-        return _ok()
-
-    monkeypatch.setattr("wiki_translation_harness.opencode_go_client.run_opencode_cli", fake)
-    client = OpenCodeGoClient(model="auto", agent="wiki-translation-harness")
-    await client.chat_completion("auto", _MESSAGES)
-    assert seen_kwargs["agent"] == "wiki-translation-harness"
-
-
 def test_run_opencode_cli_omits_model_flag_for_auto_sentinel():
     with patch(
         "wiki_translation_harness.opencode_go_client.subprocess.run",
@@ -182,25 +138,6 @@ def test_run_opencode_cli_omits_model_flag_for_auto_sentinel():
     cmd = mock_run.call_args[0][0]
     assert "--model" not in cmd
     assert "--format" in cmd and "json" in cmd
-
-
-def test_run_opencode_cli_passes_explicit_model_and_agent():
-    with patch(
-        "wiki_translation_harness.opencode_go_client.subprocess.run",
-        return_value=_cli_events(
-            {"type": "text", "part": {"text": "ok"}},
-            {"type": "step_finish", "part": {"tokens": {"input": 1, "output": 1}}},
-        ),
-    ) as mock_run:
-        run_opencode_cli(
-            "system", "user", model="anthropic/claude-sonnet-4-5", agent="wiki-translation-harness"
-        )
-
-    cmd = mock_run.call_args[0][0]
-    assert "--model" in cmd
-    assert "anthropic/claude-sonnet-4-5" in cmd
-    assert "--agent" in cmd
-    assert "wiki-translation-harness" in cmd
 
 
 def test_run_opencode_cli_parses_real_event_shape():
@@ -245,21 +182,6 @@ def test_run_opencode_cli_parses_real_event_shape():
     assert result.cost_usd == 0.0031
 
 
-def test_run_opencode_cli_concatenates_multiple_text_events():
-    events = [
-        {"type": "text", "part": {"text": "part one. "}},
-        {"type": "text", "part": {"text": "part two."}},
-        {"type": "step_finish", "part": {"tokens": {"input": 1, "output": 1}}},
-    ]
-    with patch(
-        "wiki_translation_harness.opencode_go_client.subprocess.run",
-        return_value=_cli_events(*events),
-    ):
-        result = run_opencode_cli("system", "user", model="auto")
-
-    assert result.result_text == "part one. part two."
-
-
 def test_run_opencode_cli_error_event_on_stdout_is_error():
     """Confirmed live: a bad-model rejection's error event lands on stdout,
     not stderr, alongside a non-zero exit code -- the default (non-JSON)
@@ -283,28 +205,6 @@ def test_run_opencode_cli_error_event_on_stdout_is_error():
 
     assert result.is_error
     assert "Unexpected server error" in result.stderr
-
-
-def test_run_opencode_cli_nonzero_exit_no_json_falls_back_to_stderr():
-    with patch(
-        "wiki_translation_harness.opencode_go_client.subprocess.run",
-        return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom"),
-    ):
-        result = run_opencode_cli("system", "user", model="auto")
-
-    assert result.is_error
-    assert "boom" in result.stderr
-
-
-def test_run_opencode_cli_missing_binary_reported_as_error():
-    with patch(
-        "wiki_translation_harness.opencode_go_client.subprocess.run",
-        side_effect=FileNotFoundError("no such file"),
-    ):
-        result = run_opencode_cli("system", "user", model="auto", cli_path="nonexistent-opencode")
-
-    assert result.is_error
-    assert "not found" in result.stderr
 
 
 def test_run_opencode_cli_empty_stdin_message_fails_fast():

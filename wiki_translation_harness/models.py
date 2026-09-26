@@ -17,6 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # so the two lists of accepted engine names can't drift apart.
 _VALID_PROVIDERS = ("openrouter", "local", "claude_code", "experiential", "opencode_go")
 
+# The `claude` CLI's own accepted --effort values (confirmed via `claude -p
+# --help`), matching the Messages API's output_config.effort levels.
+_VALID_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
 
 class ArticleStatus(str, Enum):
     PENDING = "pending"
@@ -161,6 +165,17 @@ class ArticleJob(BaseModel):
     sections_done: int = 0
 
 
+class ModelUsage(BaseModel):
+    """Per-model token/cost breakdown -- one entry per distinct model id
+    actually passed to an engine's chat_completion call. See
+    RunStats.model_usage/record_usage."""
+
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
+    calls: int = 0
+
+
 class RunStats(BaseModel):
     """Aggregate counters for stats.json, updated throughout a run."""
 
@@ -191,6 +206,80 @@ class RunStats(BaseModel):
     repairs_succeeded: int = 0
     repairs_failed: int = 0
     retries: int = 0
+    # Effective review model/provider in force when this run ended (see
+    # config.resolve_review_model/resolve_review_provider) -- None if the
+    # review pass was disabled for this run. Separate from repair_attempts/
+    # repairs_succeeded/repairs_failed above (the per-chunk structural
+    # repair loop), same naming convention.
+    review_model: str | None = None
+    review_provider: str | None = None
+    review_attempts: int = 0
+    review_corrections_applied: int = 0
+    review_findings_total: int = 0
+    # Separate from articles_needs_human_review: an article whose review
+    # pass still had unresolved findings after review_max_repair_attempts,
+    # but was saved anyway (see review_queue.record_review_flags) rather
+    # than withheld -- a fidelity concern is a spot-check prompt, not a
+    # publish blocker.
+    articles_flagged_by_review: int = 0
+    # Per-model breakdown of tokens_in/tokens_out/estimated_cost_usd above --
+    # keyed by the exact model id string passed to chat_completion for that
+    # call, so a run using complex_model/review_model (see Config) can show
+    # e.g. how much the cheap draft model spent vs. the stronger
+    # complex/review model, instead of only one lumped total. Every call
+    # that updates the aggregate totals below is expected to go through
+    # record_usage() so the two never drift apart.
+    model_usage: dict[str, ModelUsage] = Field(default_factory=dict)
+
+    def record_usage(self, model: str, result: TranslationResult) -> None:
+        """The single place any LLM call's usage should be recorded: updates
+        both the run-wide aggregate totals and this specific model's own
+        breakdown in one call, so they can't drift out of sync. Replaces
+        translator.py's old private _accumulate() and pipeline.py's several
+        inline stats.tokens_in += ... blocks."""
+        self.tokens_in += result.prompt_tokens
+        self.tokens_out += result.completion_tokens
+        self.estimated_cost_usd += result.cost_usd
+        self.translation_time_s += result.latency_s
+        usage = self.model_usage.setdefault(model, ModelUsage())
+        usage.tokens_in += result.prompt_tokens
+        usage.tokens_out += result.completion_tokens
+        usage.cost_usd += result.cost_usd
+        usage.calls += 1
+
+    def merge_usage_from(self, other: "RunStats") -> None:
+        """Adds another RunStats' token/cost/timing counters and per-model
+        breakdown into this one -- used by queue_runner.py to aggregate
+        spend across every article processed in a `queue` run, since each
+        article gets its own fresh RunStats from run_pipeline (so the
+        top-level queue-run tracker otherwise never sees any of it).
+        Deliberately excludes articles_completed/articles_failed/etc: those
+        are queue_runner's own outcome bookkeeping, decided independently
+        of what run_pipeline's per-article stats say (e.g. an article that
+        crashed mid-translation still needs to count as a queue-level
+        failure even though run_pipeline's own counters never got that
+        far)."""
+        self.sections_translated += other.sections_translated
+        self.cache_hits += other.cache_hits
+        self.cache_misses += other.cache_misses
+        self.tokens_in += other.tokens_in
+        self.tokens_out += other.tokens_out
+        self.estimated_cost_usd += other.estimated_cost_usd
+        self.translation_time_s += other.translation_time_s
+        self.validation_failures += other.validation_failures
+        self.repair_attempts += other.repair_attempts
+        self.repairs_succeeded += other.repairs_succeeded
+        self.repairs_failed += other.repairs_failed
+        self.retries += other.retries
+        self.review_attempts += other.review_attempts
+        self.review_corrections_applied += other.review_corrections_applied
+        self.review_findings_total += other.review_findings_total
+        for model, usage in other.model_usage.items():
+            target = self.model_usage.setdefault(model, ModelUsage())
+            target.tokens_in += usage.tokens_in
+            target.tokens_out += usage.tokens_out
+            target.cost_usd += usage.cost_usd
+            target.calls += usage.calls
 
 
 class Config(BaseModel):
@@ -215,6 +304,43 @@ class Config(BaseModel):
     # uses a cheaper/faster model for ~80% of standard body text while
     # reserving the stronger model for markup-critical sections.
     complex_model: str | None = None
+    # Provider to run complex_model on, when it should differ from
+    # `provider` (e.g. a cheap draft tier on opencode_go, complex chunks on
+    # a stronger model via claude_code). None reuses the primary client —
+    # today's behavior, only the model string changes per call. See
+    # engines.build_client_pool.
+    complex_provider: str | None = None
+    # Independent semantic-fidelity review pass: after assembly-level
+    # structural repair passes clean, the WHOLE assembled article is handed
+    # to this model, alongside the English source, to look for
+    # mistranslation, hallucinated/dropped facts, grammar errors, and
+    # cross-article transliteration inconsistency — defects structural
+    # validation (validator.py) cannot see, and that wikiqa's same-model
+    # self-check is not independent enough to reliably catch either. See
+    # pipeline.run_review_pass / review.py.
+    #
+    # Orthogonal to complex_model: complex_model routes structurally
+    # complex chunks to a stronger model at DRAFT time; review_model
+    # re-reads the whole ASSEMBLED article afterward for translation
+    # fidelity, independent of any one chunk's structural complexity.
+    # Presence is the on/off switch for the review pass, same convention as
+    # complex_model. Defaults to complex_model when unset (and complex_model
+    # is set) — a run that already configured a stronger complex-chunk
+    # model gets review "for free" on that same model, matching the common
+    # case where both roles share one higher-quality model. See
+    # config.resolve_review_model.
+    review_model: str | None = None
+    # Defaults to complex_provider (then provider) when unset, same
+    # inheritance rule as review_model -> complex_model above. See
+    # config.resolve_review_provider.
+    review_provider: str | None = None
+    # Repair-round budget for the review pass, mirroring
+    # max_repair_attempts/max_assembly_repair_rounds. Unresolved findings
+    # after this cap do NOT block delivery (see review_queue.record_review_flags)
+    # — the article is still saved, with a companion flagged-addendum file,
+    # since a fidelity concern is a human spot-check prompt, not a publish
+    # blocker the way an unresolved structural defect is.
+    review_max_repair_attempts: int = 2
     workers: int = 2
     # Process articles one at a time (still using up to `workers` concurrent
     # chunk translations within each article) instead of starting every
@@ -387,6 +513,18 @@ class Config(BaseModel):
     # no API key needed. See claude_code_client.py.
     claude_code_cli_path: str = "claude"
     claude_code_permission_mode: str = "bypassPermissions"
+    # Passed to `claude -p --effort <level>` (confirmed via `claude -p
+    # --help`) -- the same thinking-depth/token-spend knob as the Messages
+    # API's output_config.effort, whose own default is "high". Defaults to
+    # "medium" here instead: this harness's calls are short, well-specified,
+    # single-section translate/repair/review tasks, not long-horizon
+    # agentic work, so the top of the effort range buys little quality for
+    # a lot of extra token spend on this workload. One client (and setting)
+    # per provider (see engines.build_client_pool), so this applies to
+    # every model routed through provider: claude_code in a given run --
+    # currently always claude-sonnet-5 by default (config.default_model_for_provider).
+    # None omits the flag, letting the CLI use its own default (currently "high").
+    claude_code_effort: str | None = "medium"
     # Sized for the largest oversized-section chunks (never split further,
     # so a protected table/template can push a single chunk to 10k+ input
     # tokens). Confirmed directly against the raw API (bypassing this
@@ -459,6 +597,25 @@ class Config(BaseModel):
             raise ValueError(
                 "fallback_provider must be 'openrouter', 'local', 'claude_code', "
                 f"'experiential', or 'opencode_go', got {v!r}"
+            )
+        return v
+
+    @field_validator("complex_provider", "review_provider")
+    @classmethod
+    def _validate_secondary_provider(cls, v: str | None) -> str | None:
+        if v is not None and v not in _VALID_PROVIDERS:
+            raise ValueError(
+                "complex_provider/review_provider must be 'openrouter', 'local', "
+                f"'claude_code', 'experiential', or 'opencode_go', got {v!r}"
+            )
+        return v
+
+    @field_validator("claude_code_effort")
+    @classmethod
+    def _validate_claude_code_effort(cls, v: str | None) -> str | None:
+        if v is not None and v not in _VALID_EFFORT_LEVELS:
+            raise ValueError(
+                f"claude_code_effort must be one of {sorted(_VALID_EFFORT_LEVELS)} or None, got {v!r}"
             )
         return v
 

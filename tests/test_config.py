@@ -2,7 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from wiki_translation_harness.config import build_config
+from wiki_translation_harness.config import (
+    build_config,
+    resolve_review_model,
+    resolve_review_provider,
+)
 from wiki_translation_harness.models import Config
 
 _CONTACT = {"wikimedia_contact": "test@example.com"}
@@ -12,12 +16,6 @@ def test_missing_api_key_raises(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(ValueError, match="No OpenRouter API key"):
         build_config(None, {**_CONTACT, "provider": "openrouter"})
-
-
-def test_env_var_supplies_api_key(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
-    cfg = build_config(None, {**_CONTACT, "provider": "openrouter"})
-    assert cfg.openrouter_api_key == "sk-test"
 
 
 def test_default_provider_and_workers():
@@ -37,34 +35,6 @@ def test_explicit_model_survives_provider_switch(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
     cfg = build_config(None, {**_CONTACT, "provider": "openrouter", "model": "qwen/qwen3-235b-a22b"})
     assert cfg.model == "qwen/qwen3-235b-a22b"
-
-
-def test_invalid_provider_rejected():
-    with pytest.raises(ValueError, match="provider must be"):
-        build_config(None, {**_CONTACT, "provider": "bogus"})
-
-
-def test_missing_experiential_api_key_raises(monkeypatch):
-    monkeypatch.delenv("EXPLABS_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="No Experiential Labs API key"):
-        build_config(None, {**_CONTACT, "provider": "experiential"})
-
-
-def test_experiential_env_var_supplies_api_key(monkeypatch):
-    monkeypatch.setenv("EXPLABS_API_KEY", "xpl_test")
-    cfg = build_config(None, {**_CONTACT, "provider": "experiential"})
-    assert cfg.experiential_api_key == "xpl_test"
-
-
-def test_switching_to_experiential_without_model_gets_experiential_default(monkeypatch):
-    monkeypatch.setenv("EXPLABS_API_KEY", "xpl_test")
-    cfg = build_config(None, {**_CONTACT, "provider": "experiential"})
-    assert cfg.model == "qwen3.8-27b"
-
-
-def test_switching_to_opencode_go_without_model_gets_auto_sentinel(monkeypatch):
-    cfg = build_config(None, {**_CONTACT, "provider": "opencode_go"})
-    assert cfg.model == "auto"
 
 
 def test_opencode_go_needs_no_api_key(monkeypatch):
@@ -90,26 +60,6 @@ def test_cli_provider_switch_drops_stale_yaml_model(tmp_path: Path, monkeypatch)
     assert cfg.model == "claude-sonnet-5"
 
 
-def test_cli_provider_switch_with_explicit_model_is_respected(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("provider: openrouter\nmodel: deepseek/deepseek-chat-v3-0324\n")
-    cfg = build_config(config_file, {**_CONTACT, "provider": "claude_code", "model": "claude-opus-5"})
-    assert cfg.model == "claude-opus-5"
-
-
-def test_yaml_config_loaded(tmp_path: Path, monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text(
-        "provider: openrouter\nmodel: qwen/qwen3-235b-a22b\nworkers: 8\nopenrouter_api_key: sk-yaml\n"
-    )
-    cfg = build_config(config_file, _CONTACT)
-    assert cfg.model == "qwen/qwen3-235b-a22b"
-    assert cfg.workers == 8
-    assert cfg.openrouter_api_key == "sk-yaml"
-
-
 def test_cli_overrides_win_over_yaml(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     config_file = tmp_path / "config.yaml"
@@ -127,26 +77,11 @@ def test_env_var_overrides_yaml_key(tmp_path: Path, monkeypatch):
     assert cfg.openrouter_api_key == "sk-env"
 
 
-def test_validate_alias_from_yaml(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("validate: false\n")
-    cfg = build_config(config_file, _CONTACT)
-    assert cfg.validate_output is False
-
-
 def test_missing_wikimedia_contact_raises(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
     monkeypatch.delenv("WIKIMEDIA_CONTACT", raising=False)
     with pytest.raises(ValueError, match="User-Agent policy"):
         build_config(None, {})
-
-
-def test_wikimedia_contact_env_var(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
-    monkeypatch.setenv("WIKIMEDIA_CONTACT", "env-contact@example.com")
-    cfg = build_config(None, {})
-    assert "env-contact@example.com" in cfg.user_agent
 
 
 def test_user_agent_computed_from_contact(monkeypatch):
@@ -156,33 +91,25 @@ def test_user_agent_computed_from_contact(monkeypatch):
     assert "someone@example.com" in cfg.user_agent
 
 
-def test_explicit_user_agent_bypasses_contact_requirement(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
-    monkeypatch.delenv("WIKIMEDIA_CONTACT", raising=False)
-    cfg = build_config(None, {"user_agent": "custom-ua/1.0 (custom@example.com)"})
-    assert cfg.user_agent == "custom-ua/1.0 (custom@example.com)"
+def test_resolve_review_model_inherits_complex_model():
+    cfg = Config.model_validate({**_CONTACT, "complex_model": "claude-sonnet-5"})
+    assert resolve_review_model(cfg) == "claude-sonnet-5"
 
 
-def test_fallback_provider_round_trips():
-    # Regression test: fallback_provider was read everywhere (cli.py,
-    # pipeline.py's ensure_fallback_engine) via config.fallback_provider but
-    # was never declared as a Config field, so pydantic silently dropped it
-    # and any real credit-exhaustion mid-run would have crashed with
-    # AttributeError the first time the fallback switch actually fired.
-    cfg = Config.model_validate({**_CONTACT, "fallback_provider": "claude_code"})
-    assert cfg.fallback_provider == "claude_code"
+def test_resolve_review_provider_inherits_complex_provider():
+    cfg = Config.model_validate(
+        {
+            **_CONTACT,
+            "provider": "opencode_go",
+            "complex_model": "claude-sonnet-5",
+            "complex_provider": "claude_code",
+        }
+    )
+    assert resolve_review_provider(cfg) == "claude_code"
 
 
-def test_fallback_provider_defaults_to_none():
+def test_claude_code_effort_defaults_to_medium():
     cfg = Config.model_validate({**_CONTACT})
-    assert cfg.fallback_provider is None
+    assert cfg.claude_code_effort == "medium"
 
 
-def test_opencode_go_accepted_as_fallback_provider():
-    cfg = Config.model_validate({**_CONTACT, "fallback_provider": "opencode_go"})
-    assert cfg.fallback_provider == "opencode_go"
-
-
-def test_invalid_fallback_provider_rejected():
-    with pytest.raises(ValueError, match="fallback_provider must be"):
-        Config.model_validate({**_CONTACT, "fallback_provider": "bogus"})

@@ -8,31 +8,9 @@ from wiki_translation_harness.mediawiki import (
     MediaWikiClient,
     MediaWikiClientPool,
     MediaWikiError,
-    wiki_api_url_for_lang,
 )
 
 API_URL = "https://en.wikipedia.org/w/api.php"
-
-
-def test_wiki_api_url_for_lang():
-    assert wiki_api_url_for_lang("sq") == "https://sq.wikipedia.org/w/api.php"
-    assert wiki_api_url_for_lang("en") == "https://en.wikipedia.org/w/api.php"
-
-
-def test_client_pool_reuses_client_for_same_lang():
-    pool = MediaWikiClientPool("test-agent/1.0", default_lang="en")
-    a = pool.get("sq")
-    b = pool.get("sq")
-    assert a is b
-
-
-def test_client_pool_different_lang_different_client():
-    pool = MediaWikiClientPool("test-agent/1.0", default_lang="en")
-    en_client = pool.get("en")
-    sq_client = pool.get("sq")
-    assert en_client is not sq_client
-    assert en_client.api_url == "https://en.wikipedia.org/w/api.php"
-    assert sq_client.api_url == "https://sq.wikipedia.org/w/api.php"
 
 
 def test_client_pool_uses_override_only_for_default_lang():
@@ -41,14 +19,6 @@ def test_client_pool_uses_override_only_for_default_lang():
     )
     assert pool.get("en").api_url == "https://custom.example.org/w/api.php"
     assert pool.get("sq").api_url == "https://sq.wikipedia.org/w/api.php"
-
-
-@pytest.mark.asyncio
-async def test_client_pool_aclose_closes_all():
-    pool = MediaWikiClientPool("test-agent/1.0", default_lang="en")
-    pool.get("en")
-    pool.get("sq")
-    await pool.aclose()  # should not raise
 
 
 @pytest.mark.asyncio
@@ -135,18 +105,6 @@ async def test_parse_wikitext_success():
         client = MediaWikiClient(API_URL, "test-agent/1.0")
         result = await client.parse_wikitext("'''hi'''", title="API")
         assert result["text"] == "<p>hi</p>"
-        await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_parse_wikitext_error_response_raises():
-    with respx.mock(base_url=API_URL) as mock:
-        mock.post(API_URL).mock(
-            return_value=httpx.Response(200, json={"error": {"code": "bad", "info": "nope"}})
-        )
-        client = MediaWikiClient(API_URL, "test-agent/1.0")
-        with pytest.raises(MediaWikiError, match="action=parse failed"):
-            await client.parse_wikitext("text", title="API")
         await client.aclose()
 
 

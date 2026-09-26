@@ -3,7 +3,12 @@ from pathlib import Path
 import orjson
 
 from wiki_translation_harness.models import ValidationIssue
-from wiki_translation_harness.review_queue import record_needs_human_review, review_path_for
+from wiki_translation_harness.review_queue import (
+    record_needs_human_review,
+    record_review_flags,
+    review_flags_path_for,
+    review_path_for,
+)
 
 
 def _issue(**kw) -> ValidationIssue:
@@ -22,20 +27,6 @@ def test_writes_review_markdown(tmp_path: Path):
     assert "5" in text
 
 
-def test_no_wiki_file_written(tmp_path: Path):
-    record_needs_human_review(tmp_path, "Test Article", [_issue()], 3)
-    assert not (tmp_path / "Test_Article.wiki").exists()
-
-
-def test_writes_index_json(tmp_path: Path):
-    record_needs_human_review(tmp_path, "Test Article", [_issue(line_number=5)], 3)
-    index = orjson.loads((tmp_path / "needs_human_review.json").read_bytes())
-    assert len(index) == 1
-    assert index[0]["title"] == "Test Article"
-    assert index[0]["repair_rounds"] == 3
-    assert index[0]["findings"][0]["explanation"] == "{{harvc}} is broken"
-
-
 def test_index_upserts_by_title_not_duplicates(tmp_path: Path):
     record_needs_human_review(tmp_path, "Test Article", [_issue()], 3)
     record_needs_human_review(tmp_path, "Test Article", [_issue(message="different issue this time")], 2)
@@ -45,14 +36,19 @@ def test_index_upserts_by_title_not_duplicates(tmp_path: Path):
     assert index[0]["findings"][0]["explanation"] == "different issue this time"
 
 
-def test_index_accumulates_multiple_articles(tmp_path: Path):
-    record_needs_human_review(tmp_path, "Article A", [_issue()], 3)
-    record_needs_human_review(tmp_path, "Article B", [_issue()], 1)
-    index = orjson.loads((tmp_path / "needs_human_review.json").read_bytes())
-    assert {e["title"] for e in index} == {"Article A", "Article B"}
+def test_record_review_flags_writes_markdown_without_blocking_index(tmp_path: Path):
+    # Non-blocking counterpart to record_needs_human_review: must NOT touch
+    # needs_human_review.json (that index is reserved for the structural,
+    # publish-blocking case) -- see review_queue.py's module docstring.
+    path = record_review_flags(
+        tmp_path, "Test Article", [_issue(kind="semantic_fidelity", message="Dropped a fact.")], 2
+    )
+    assert path == review_flags_path_for(tmp_path, "Test Article")
+    text = path.read_text(encoding="utf-8")
+    assert "Test Article" in text
+    assert "2 review-repair round" in text
+    assert "Dropped a fact." in text
+    assert "WAS saved" in text
+    assert not (tmp_path / "needs_human_review.json").exists()
 
 
-def test_sanitizes_title_for_filename(tmp_path: Path):
-    path = record_needs_human_review(tmp_path, "Foo/Bar: Baz", [_issue()], 1)
-    assert "/" not in path.name
-    assert path.exists()

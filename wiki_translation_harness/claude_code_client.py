@@ -123,6 +123,7 @@ def run_claude_cli(
     permission_mode: str = "bypassPermissions",
     log_dir: Path | str | None = None,
     timeout_s: float = 600.0,
+    effort: str | None = None,
 ) -> ClaudeCLIResult:
     """Single-shot, tool-less, blocking call — see ClaudeCodeClient.chat_completion
     for why this runs off the event loop via asyncio.to_thread rather than
@@ -133,7 +134,12 @@ def run_claude_cli(
     embedded in user_prompt, there is nothing to fetch live). System prompt
     goes to a temp file (--system-prompt-file) and the user prompt goes over
     stdin, since full articles plus skill content can exceed the OS argv
-    size limit."""
+    size limit.
+
+    effort (low/medium/high/xhigh/max, confirmed via `claude -p --help`)
+    maps to the same thinking-depth/token-spend knob as the Messages API's
+    output_config.effort -- see models.py's Config.claude_code_effort.
+    None omits the flag, letting the CLI use its own default."""
     cmd = [
         cli_path,
         "-p",
@@ -148,6 +154,8 @@ def run_claude_cli(
         "--verbose",
         "--no-session-persistence",
     ]
+    if effort:
+        cmd += ["--effort", effort]
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -337,6 +345,7 @@ class ClaudeCodeClient:
         timeout_s: float = 600.0,
         max_retries: int = 5,
         log_dir: Path | str | None = None,
+        effort: str | None = None,
     ):
         self.model = model
         self.cli_path = cli_path
@@ -344,6 +353,7 @@ class ClaudeCodeClient:
         self.timeout_s = timeout_s
         self.max_retries = max_retries
         self.log_dir = log_dir
+        self.effort = effort
 
     async def chat_completion(
         self,
@@ -381,6 +391,7 @@ class ClaudeCodeClient:
                 permission_mode=self.permission_mode,
                 timeout_s=self.timeout_s,
                 log_dir=self.log_dir,
+                effort=self.effort,
             )
             if not result.is_error:
                 return result.result_text, result.input_tokens, result.output_tokens

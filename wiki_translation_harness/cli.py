@@ -33,9 +33,28 @@ app = typer.Typer(
 console = Console()
 
 
+def _print_model_usage(stats) -> None:
+    """Per-model token/cost breakdown (RunStats.model_usage) -- e.g.
+    distinguishing a cheap draft model's spend from a stronger
+    complex/review model's, when Config.complex_model/review_model differ
+    from Config.model. Prints nothing when nothing was ever recorded (e.g.
+    a run that hit zero real chat_completion calls)."""
+    if not stats.model_usage:
+        return
+    console.print("Per-model usage:")
+    for model, usage in sorted(stats.model_usage.items(), key=lambda kv: -kv[1].cost_usd):
+        console.print(
+            f"  {model}: {usage.tokens_in:,} in / {usage.tokens_out:,} out tokens, "
+            f"${usage.cost_usd:.4f} ({usage.calls} call{'s' if usage.calls != 1 else ''})"
+        )
+
+
 def _build_overrides(
     model: Optional[str],
     complex_model: Optional[str] = None,
+    complex_provider: Optional[str] = None,
+    review_model: Optional[str] = None,
+    review_provider: Optional[str] = None,
     workers: Optional[int] = None,
     temperature: Optional[float] = None,
     max_retries: Optional[int] = None,
@@ -51,6 +70,9 @@ def _build_overrides(
     overrides = {
         "model": model,
         "complex_model": complex_model,
+        "complex_provider": complex_provider,
+        "review_model": review_model,
+        "review_provider": review_provider,
         "workers": workers,
         "temperature": temperature,
         "max_retries": max_retries,
@@ -95,6 +117,24 @@ def main(
         None, "--complex-model",
         help="When set, complex chunks (Infoboxes, tables, dense refs) are routed to this "
         "model instead of --model — a hybrid strategy for cost efficiency.",
+    ),
+    complex_provider: Optional[str] = typer.Option(
+        None, "--complex-provider",
+        help="Provider to run --complex-model on, when it should differ from --provider "
+        "(e.g. a cheap draft tier on opencode_go, complex chunks on a stronger model via "
+        "claude_code). Defaults to --provider.",
+    ),
+    review_model: Optional[str] = typer.Option(
+        None, "--review-model",
+        help="When set, an independent semantic-fidelity review pass re-reads the whole "
+        "assembled article with this model after structural repair passes clean, looking "
+        "for mistranslation, hallucinated/dropped facts, grammar errors, and "
+        "cross-article transliteration inconsistency. Defaults to --complex-model when "
+        "unset (and --complex-model is set).",
+    ),
+    review_provider: Optional[str] = typer.Option(
+        None, "--review-provider",
+        help="Provider to run --review-model on. Defaults to --complex-provider, then --provider.",
     ),
     provider: Optional[str] = typer.Option(
         None, "--provider",
@@ -145,6 +185,9 @@ def main(
     overrides = _build_overrides(
         model=model,
         complex_model=complex_model,
+        complex_provider=complex_provider,
+        review_model=review_model,
+        review_provider=review_provider,
         workers=workers,
         temperature=temperature,
         max_retries=max_retries,
@@ -203,6 +246,7 @@ def main(
         f"skipped: {stats.articles_skipped}. Estimated cost: ${stats.estimated_cost_usd:.4f}. "
         f"Stats written to {cfg.stats_path}"
     )
+    _print_model_usage(stats)
 
 
 @app.command()
@@ -303,6 +347,10 @@ def queue(
         3.0, "--stale-hours", help="A CLAIMED line older than this is treated as abandoned and reclaimed"
     ),
     model: Optional[str] = typer.Option(None, "--model"),
+    complex_model: Optional[str] = typer.Option(None, "--complex-model"),
+    complex_provider: Optional[str] = typer.Option(None, "--complex-provider"),
+    review_model: Optional[str] = typer.Option(None, "--review-model"),
+    review_provider: Optional[str] = typer.Option(None, "--review-provider"),
     provider: Optional[str] = typer.Option(None, "--provider"),
     fallback_provider: Optional[str] = typer.Option(
         None, "--fallback-provider",
@@ -329,6 +377,10 @@ def queue(
 
     overrides = _build_overrides(
         model=model,
+        complex_model=complex_model,
+        complex_provider=complex_provider,
+        review_model=review_model,
+        review_provider=review_provider,
         workers=workers,
         temperature=temperature,
         max_retries=max_retries,
@@ -364,6 +416,7 @@ def queue(
         f"ran {end - start}). Completed: {stats.articles_completed}, failed: {stats.articles_failed}. "
         f"Estimated cost: ${stats.estimated_cost_usd:.4f}."
     )
+    _print_model_usage(stats)
 
 
 if __name__ == "__main__":

@@ -15,8 +15,13 @@ import time
 import httpx
 
 from wiki_translation_harness.cache import TranslationCache, VerificationCache, compute_key
-from wiki_translation_harness.config import default_model_for_provider
-from wiki_translation_harness.engines import LLMEngineClient, build_llm_client
+from wiki_translation_harness.config import (
+    default_model_for_provider,
+    resolve_complex_provider,
+    resolve_review_model,
+    resolve_review_provider,
+)
+from wiki_translation_harness.engines import LLMEngineClient, build_client_pool, build_llm_client
 from wiki_translation_harness.citation_language import (
     dedupe_short_footnotes,
     fill_missing_citation_languages,
@@ -51,7 +56,8 @@ from wiki_translation_harness.parser import build_chunks, split_into_sections
 from wiki_translation_harness.progress import ProgressReporter
 from wiki_translation_harness.report import ArticleReportData, build_article_report, save_report
 from wiki_translation_harness.repair import repair_chunk
-from wiki_translation_harness.review_queue import record_needs_human_review
+from wiki_translation_harness.review import review_article
+from wiki_translation_harness.review_queue import record_needs_human_review, record_review_flags
 from wiki_translation_harness.skill_loader import SkillContent, load_skill
 from wiki_translation_harness.sources import ArticleInput, load_article_source
 from wiki_translation_harness.statistics import StatsTracker
@@ -367,10 +373,7 @@ async def run_assembly_repair(
                     on_retry=on_retry,
                     qa_skill=qa_skill,
                 )
-                stats.tokens_in += repair_result.prompt_tokens
-                stats.tokens_out += repair_result.completion_tokens
-                stats.estimated_cost_usd += repair_result.cost_usd
-                stats.translation_time_s += repair_result.latency_s
+                stats.record_usage(config.model, repair_result)
                 chunk.translated_text = repair_result.text
                 if cache is not None:
                     # Without this, a fix made here is invisible to future
@@ -396,6 +399,157 @@ async def run_assembly_repair(
         )
 
     return assembled, combined_issues, rounds_used, citation_languages_filled
+
+
+def _localize_review_issues(
+    issues: list[ValidationIssue], assembled: str, spans: list[tuple[Chunk, int, int]]
+) -> tuple[dict[int, list[str]], list[str]]:
+    """Same chunk-localization strategy as run_assembly_repair's own loop
+    (via _chunk_for_line), except a review finding has no wikitext
+    line_number to begin with (the review model doesn't see line numbers) —
+    only a `snippet` it was asked to copy verbatim from the translated
+    text. Locates it by searching the assembled text for that snippet and
+    converting the match offset to a line number; a snippet that can't be
+    found verbatim (the model paraphrased instead of copying) falls back to
+    broadcasting to every chunk, same as an unlocalizable structural
+    finding does."""
+    localized: dict[int, list[str]] = {}
+    broadcast: list[str] = []
+    for issue in issues:
+        finding = issue.as_finding()
+        text_line = f"{finding['severity']}: {finding['explanation']}"
+        if finding["snippet"]:
+            text_line += f" (near: {finding['snippet']})"
+
+        line_number = issue.line_number
+        if line_number is None and issue.snippet:
+            offset = assembled.find(issue.snippet)
+            if offset != -1:
+                line_number = assembled.count("\n", 0, offset) + 1
+
+        chunk = _chunk_for_line(spans, line_number)
+        if chunk is not None:
+            localized.setdefault(id(chunk), []).append(text_line)
+        else:
+            broadcast.append(text_line)
+    return localized, broadcast
+
+
+async def run_review_pass(
+    chunks: list[Chunk],
+    source: ArticleSource,
+    config: Config,
+    initial_assembled: str,
+    review_client: LLMEngineClient,
+    review_model: str,
+    skill: SkillContent,
+    review_pricing: ModelPricing | None,
+    target_mw_client: MediaWikiClient,
+    stats: RunStats,
+    facts: VerifiedFacts,
+    on_retry: RetryCallback | None = None,
+    cache: TranslationCache | None = None,
+    qa_skill: SkillContent | None = None,
+) -> tuple[str, list[ValidationIssue], int]:
+    """Independent semantic-fidelity review of an already assembled,
+    structurally valid article (see review.py) — the whole-article
+    counterpart to translate_chunk's per-chunk generate/validate loop, run
+    once assembly-level structural repair (run_assembly_repair above) has
+    already passed clean, so a strong-model review call is never spent on
+    wikitext that might still get rewritten by structural repair.
+
+    Each round re-runs the review call (cheap: it only ever returns a
+    findings list, not a full retranslation) plus a structural safety-net
+    check (a review-driven edit could reintroduce a structural break — must
+    not ship that silently), localizes findings to owning chunks, and
+    repairs only those chunks via the existing repair_chunk(), same as
+    run_assembly_repair does for deterministic findings. Capped at
+    config.review_max_repair_attempts.
+
+    Returns (assembled_text, remaining_issues, rounds_used) — remaining_issues
+    is empty iff the review pass converged (no findings, or every finding
+    got resolved within the round cap); a non-empty result does NOT mean
+    the caller should withhold the article (see review_queue.record_review_flags)."""
+
+    async def _run_review_call(assembled_text: str) -> list[ValidationIssue]:
+        findings, result = await review_article(
+            review_client,
+            review_model,
+            config.temperature,
+            source.wikitext,
+            assembled_text,
+            source.title,
+            config.target_lang,
+            facts.template_params,
+            review_pricing,
+            on_retry=on_retry,
+        )
+        stats.record_usage(review_model, result)
+        stats.review_findings_total += len(findings)
+        return findings
+
+    assembled = initial_assembled
+    review_findings = await _run_review_call(assembled)
+    structural_issues = await _validate_assembled(
+        assembled, target_mw_client, source.title, config.live_validate, config.live_validate_timeout_s
+    )
+    combined = structural_issues + review_findings
+
+    rounds_used = 0
+    while combined and rounds_used < config.review_max_repair_attempts:
+        rounds_used += 1
+        _, spans = assemble_chunks_with_spans(chunks)
+        localized, broadcast = _localize_review_issues(combined, assembled, spans)
+
+        for chunk in chunks:
+            errors_for_chunk = localized.get(id(chunk), []) + broadcast
+            if not errors_for_chunk:
+                continue
+            stats.review_attempts += 1
+            try:
+                repair_result = await repair_chunk(
+                    review_client,
+                    skill,
+                    review_model,
+                    config.temperature,
+                    chunk.source_lang,
+                    config.target_lang,
+                    chunk.article_title,
+                    chunk.section_title,
+                    chunk.translated_text or "",
+                    errors_for_chunk,
+                    review_pricing,
+                    on_retry=on_retry,
+                    qa_skill=qa_skill,
+                )
+                stats.record_usage(review_model, repair_result)
+                stats.review_corrections_applied += 1
+                chunk.translated_text = repair_result.text
+                if cache is not None:
+                    facts_block = build_verified_facts_block(chunk.text, facts) if facts else ""
+                    facts_hash = (
+                        hashlib.sha256(facts_block.encode("utf-8")).hexdigest()[:16] if facts_block else ""
+                    )
+                    key = compute_key(
+                        review_model, chunk.source_lang, config.target_lang, chunk.text, skill.content_hash, facts_hash
+                    )
+                    cache.set(
+                        key, review_model, chunk.source_lang, config.target_lang, chunk.text, chunk.translated_text
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Review-driven repair failed for %r chunk %d (round %d): %s",
+                    source.title, chunk.order, rounds_used, exc,
+                )
+
+        assembled = assemble_chunks(chunks)
+        structural_issues = await _validate_assembled(
+            assembled, target_mw_client, source.title, config.live_validate, config.live_validate_timeout_s
+        )
+        review_findings = await _run_review_call(assembled)
+        combined = structural_issues + review_findings
+
+    return assembled, combined, rounds_used
 
 
 async def _plan_article(
@@ -471,9 +625,11 @@ async def run_pipeline(
     verification_cache = VerificationCache(config.verification_db_path) if config.verify_links else None
 
     mw_pool = MediaWikiClientPool(config.user_agent, config.source_lang, config.source_wiki_api)
-    llm_client, effective_model = build_llm_client(config)
-    if effective_model != config.model:
-        config = config.model_copy(update={"model": effective_model})
+    client_pool, config = build_client_pool(config)
+    llm_client = client_pool.get(config.provider)
+    review_model = resolve_review_model(config)
+    review_provider = resolve_review_provider(config) if review_model else None
+    review_client = client_pool.get(review_provider) if review_provider else None
     wikidata_client = (
         httpx.AsyncClient(headers={"User-Agent": config.user_agent}, timeout=config.wikidata_timeout_s)
         if config.verify_links
@@ -485,11 +641,17 @@ async def run_pipeline(
         httpx.AsyncClient(headers={"User-Agent": config.user_agent}) if config.fill_citation_languages else None
     )
 
+    complex_client = client_pool.get(resolve_complex_provider(config)) if config.complex_model else None
+
     try:
         pricing = await llm_client.get_pricing_for(config.model)
         complex_pricing = (
-            await llm_client.get_pricing_for(config.complex_model)
-            if config.complex_model else None
+            await complex_client.get_pricing_for(config.complex_model)
+            if complex_client is not None else None
+        )
+        review_pricing = (
+            await review_client.get_pricing_for(review_model)
+            if review_client is not None else None
         )
 
         pending_items: list[ArticleInput] = []
@@ -663,6 +825,7 @@ async def run_pipeline(
                                 verified_facts=facts,
                                 qa_skill=qa_skill,
                                 complex_pricing=complex_pricing,
+                                complex_client=complex_client,
                             )
                             break
                         except EngineError as exc:
@@ -784,6 +947,25 @@ async def run_pipeline(
                     reporter.on_article_done(source.title, "needs_human_review")
                 return
 
+            review_findings: list[ValidationIssue] = []
+            if review_model is not None:
+                assembled, review_findings, review_rounds = await run_review_pass(
+                    chunks, source, config, assembled, review_client, review_model, skill,
+                    review_pricing, target_mw_client, stats, facts, on_retry, cache, qa_skill,
+                )
+                if review_findings:
+                    stats.articles_flagged_by_review += 1
+                    flags_path = record_review_flags(config.output_dir, source.title, review_findings, review_rounds)
+                    logger.warning(
+                        "Article %r has %d unresolved semantic-review finding(s) after %d round(s) "
+                        "— flagged at %s, saved anyway: %s",
+                        source.title,
+                        len(review_findings),
+                        review_rounds,
+                        flags_path,
+                        "; ".join(f"{i.kind}: {i.message}" for i in review_findings),
+                    )
+
             # Add attribution block as HTML comment at the bottom of the file
             attribution = build_attribution_block(source)
             if attribution:
@@ -801,6 +983,8 @@ async def run_pipeline(
                         chunks=chunks,
                         facts=facts,
                         citation_languages_filled=citation_languages_filled,
+                        review_model=review_model,
+                        review_findings=review_findings,
                     ),
                     assembled,
                 )
@@ -820,7 +1004,23 @@ async def run_pipeline(
 
     finally:
         await mw_pool.aclose()
-        await llm_client.aclose()
+        # Closes every client the pool actually built (complex/review's
+        # own client, only when routed to a different provider than the
+        # draft tier) plus llm_client itself -- which, after a mid-run
+        # ensure_fallback_engine() switch, is a client build_llm_client
+        # constructed directly and is NOT one of client_pool's entries (see
+        # that function's own "deliberately not closing the old client"
+        # comment: the pre-switch client is intentionally left for this
+        # same final cleanup instead of being closed mid-run under a
+        # possible in-flight call). Deduplicated by identity so a
+        # single-provider run (the common case, llm_client IS the pool's
+        # one entry) still closes exactly one client, not two.
+        seen_clients: set[int] = set()
+        for client in (llm_client, *client_pool.clients.values()):
+            if id(client) in seen_clients:
+                continue
+            seen_clients.add(id(client))
+            await client.aclose()
         if wikidata_client is not None:
             await wikidata_client.aclose()
         if citation_client is not None:
@@ -835,6 +1035,8 @@ async def run_pipeline(
         # that effective value, not just what the run started with.
         stats_tracker.stats.provider = config.provider
         stats_tracker.stats.model = config.model
+        stats_tracker.stats.review_model = review_model
+        stats_tracker.stats.review_provider = review_provider
         stats_tracker.write(config.stats_path)
 
     return stats_tracker

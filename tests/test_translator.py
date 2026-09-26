@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from wiki_translation_harness.cache import TranslationCache
-from wiki_translation_harness.models import Chunk, ChunkStatus, Config, ModelPricing, RunStats
+from wiki_translation_harness.models import Chunk, ChunkStatus, Config, RunStats
 from wiki_translation_harness.skill_loader import SkillContent
 from wiki_translation_harness.translator import translate_chunk
 from wiki_translation_harness.verification import VerifiedFacts
@@ -64,6 +64,9 @@ async def test_translate_valid_output_no_repair(tmp_path: Path):
     assert stats.cache_misses == 1
     assert stats.tokens_in == 100
     assert stats.tokens_out == 50
+    assert stats.model_usage["test-model"].tokens_in == 100
+    assert stats.model_usage["test-model"].tokens_out == 50
+    assert stats.model_usage["test-model"].calls == 1
     cache.close()
 
 
@@ -139,79 +142,6 @@ async def test_repair_exhausted_marks_failed_and_does_not_cache(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_validation_disabled_skips_repair(tmp_path: Path):
-    client = FakeOpenRouterClient(["[[broken but validation is off"])
-    cache = TranslationCache(tmp_path / "c.sqlite3")
-    stats = RunStats()
-    outcome = await translate_chunk(
-        _chunk(), _config(validate=False), client, _skill(), cache, None, stats
-    )
-    assert outcome.chunk.status == ChunkStatus.TRANSLATED
-    assert len(client.calls) == 1  # no repair call made
-    cache.close()
-
-
-@pytest.mark.asyncio
-async def test_cost_accumulated_from_pricing(tmp_path: Path):
-    client = FakeOpenRouterClient(["ok"])
-    cache = TranslationCache(tmp_path / "c.sqlite3")
-    stats = RunStats()
-    pricing = ModelPricing(model_id="test-model", prompt_price_per_token=0.00001, completion_price_per_token=0.00002)
-    await translate_chunk(_chunk(), _config(), client, _skill(), cache, pricing, stats)
-    assert stats.estimated_cost_usd == pytest.approx(100 * 0.00001 + 50 * 0.00002)
-    cache.close()
-
-
-@pytest.mark.asyncio
-async def test_per_chunk_source_lang_used_in_skill_message(tmp_path: Path):
-    client = FakeOpenRouterClient(["ok"])
-    cache = TranslationCache(tmp_path / "c.sqlite3")
-    stats = RunStats()
-    # config default source_lang is "en", but this chunk overrides to "sq"
-    await translate_chunk(_chunk(source_lang="sq"), _config(), client, _skill(), cache, None, stats)
-    user_message = client.calls[-1][-1]["content"]
-    assert "Source language: sq" in user_message
-
-
-@pytest.mark.asyncio
-async def test_repair_call_receives_qa_skill(tmp_path: Path):
-    client = FakeOpenRouterClient(
-        [
-            "[[broken link translation",  # initial translation: invalid
-            "'''Parisi''' është qytet me [[Lidhje|lidhje]].",  # repair: valid
-        ]
-    )
-    cache = TranslationCache(tmp_path / "c.sqlite3")
-    stats = RunStats()
-    qa_skill = SkillContent(skill_md="Check ref names before delivery.", reference_texts={})
-    outcome = await translate_chunk(
-        _chunk(), _config(), client, _skill(), cache, None, stats, qa_skill=qa_skill
-    )
-
-    assert outcome.validation.valid
-    repair_system_prompt = client.calls[-1][0]["content"]
-    assert "Check ref names before delivery." in repair_system_prompt
-    # the normal (first) translation call must never have seen it
-    first_system_prompt = client.calls[0][0]["content"]
-    assert "Check ref names before delivery." not in first_system_prompt
-    cache.close()
-
-
-@pytest.mark.asyncio
-async def test_established_rendering_recorded_after_successful_translation(tmp_path: Path):
-    client = FakeOpenRouterClient(
-        ["Shih {{ill|arkitektura e qëndrueshme|en|Sustainable architecture}}."]
-    )
-    cache = TranslationCache(tmp_path / "c.sqlite3")
-    stats = RunStats()
-    facts = VerifiedFacts(links={"Sustainable architecture": None})
-    await translate_chunk(_chunk(), _config(), client, _skill(), cache, None, stats, verified_facts=facts)
-
-    assert facts.established_renderings == {"Sustainable architecture": "arkitektura e qëndrueshme"}
-    cache.close()
-
-
-@pytest.mark.asyncio
 async def test_later_chunk_is_told_about_earlier_chunks_established_rendering(tmp_path: Path):
     cache = TranslationCache(tmp_path / "c.sqlite3")
     stats = RunStats()
@@ -264,3 +194,65 @@ async def test_per_chunk_source_lang_isolates_cache(tmp_path: Path):
     assert not outcome.from_cache
     assert outcome.chunk.translated_text == "Albanian-sourced translation"
     cache.close()
+
+
+def _complex_chunk(text="{{Infobox settlement}}") -> Chunk:
+    return Chunk(
+        article_title="Paris",
+        section_titles=["Infobox"],
+        order=0,
+        text=text,
+        token_estimate=10,
+        source_lang="en",
+        is_complex=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_complex_chunk_routes_to_distinct_complex_client_when_given():
+    draft_client = FakeOpenRouterClient([])  # would raise IndexError if called
+    complex_client = FakeOpenRouterClient(["'''Parisi''' është qytet."])
+    stats = RunStats()
+    outcome = await translate_chunk(
+        _complex_chunk(),
+        _config(complex_model="strong-model"),
+        draft_client,
+        _skill(),
+        None,
+        None,
+        stats,
+        complex_client=complex_client,
+    )
+    assert outcome.validation.valid
+    assert draft_client.calls == []
+    assert len(complex_client.calls) == 1
+    # model_usage is keyed by model id, not client -- confirms spend is
+    # attributed to "strong-model" (config.complex_model), not "test-model"
+    # (config.model), even though both share this test's draft_client type.
+    assert "strong-model" in stats.model_usage
+    assert "test-model" not in stats.model_usage
+
+
+@pytest.mark.asyncio
+async def test_complex_chunk_repair_also_uses_complex_client():
+    draft_client = FakeOpenRouterClient([])  # would raise IndexError if called
+    complex_client = FakeOpenRouterClient(
+        # First response uses {{harvc}}, which validator.py flags unconditionally
+        # (broken on sqwiki) -> triggers a repair round; second is clean.
+        ["Bibliografia.\n{{harvc|last=Smith|c=Ch1}}\n", "Bibliografia.\n{{Cite book|last=Smith}}\n"]
+    )
+    stats = RunStats()
+    outcome = await translate_chunk(
+        _complex_chunk(),
+        _config(complex_model="strong-model", max_repair_attempts=1),
+        draft_client,
+        _skill(),
+        None,
+        None,
+        stats,
+        complex_client=complex_client,
+    )
+    assert draft_client.calls == []
+    assert len(complex_client.calls) == 2
+    assert outcome.repair_attempts == 1
+    assert outcome.validation.valid

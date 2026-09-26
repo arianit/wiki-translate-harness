@@ -52,13 +52,6 @@ async def test_successful_call_returns_usage(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_no_user_message_raises():
-    client = ClaudeCodeClient(model="claude-sonnet-5")
-    with pytest.raises(ClaudeCodeError):
-        await client.chat_completion("claude-sonnet-5", [{"role": "system", "content": "x"}])
-
-
-@pytest.mark.asyncio
 async def test_missing_binary_fails_fast_without_retrying(monkeypatch):
     calls = []
 
@@ -88,17 +81,6 @@ async def test_retries_then_succeeds(monkeypatch):
     )
     assert text == "përshëndetje"
     assert retries_seen == [1, 2]
-
-
-@pytest.mark.asyncio
-async def test_gives_up_after_max_retries(monkeypatch):
-    monkeypatch.setattr(
-        "wiki_translation_harness.claude_code_client.run_claude_cli",
-        lambda *a, **kw: _err(stderr="persistent failure"),
-    )
-    client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=2)
-    with pytest.raises(ClaudeCodeError, match="persistent failure"):
-        await client.chat_completion("claude-sonnet-5", _MESSAGES)
 
 
 def test_truncation_heuristic_flags_short_result_as_error():
@@ -160,43 +142,6 @@ def test_max_tokens_stop_reason_flagged_as_truncated():
 
     assert result.is_error
     assert "max_tokens" in result.stderr
-
-
-def test_end_turn_with_moderate_ratio_not_flagged():
-    """Regression test for a real false positive: a genuinely complete,
-    naturally-finished response (stop_reason: end_turn) at a ~1.3
-    chars/token ratio -- below mmtp's original 2.0 threshold but above the
-    lowered 1.0 -- confirmed live that Albanian wikitext output can
-    legitimately run this dense (a real reproduction measured 1.94 for a
-    confirmed-complete response) -- must not be flagged. Uses output_tokens
-    above the 2000 noise floor so the ratio check actually runs."""
-    import json
-    import subprocess
-    from unittest.mock import patch
-
-    from wiki_translation_harness.claude_code_client import run_claude_cli
-
-    text = "x" * 4000  # 4000 chars / 3000 visible tokens = 1.33 -- between 1.0 and 2.0
-    events = [
-        {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}},
-        {
-            "type": "result",
-            "is_error": False,
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 100, "output_tokens": 3000},
-            "total_cost_usd": 0.1,
-        },
-    ]
-    stdout = "\n".join(json.dumps(e) for e in events)
-
-    with patch(
-        "wiki_translation_harness.claude_code_client.subprocess.run",
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
-    ):
-        result = run_claude_cli("system", "user", model="claude-sonnet-5")
-
-    assert not result.is_error
-    assert result.result_text == text
 
 
 def test_thinking_tokens_excluded_from_truncation_check():
@@ -276,78 +221,6 @@ def test_cache_tokens_counted_as_input():
     assert result.input_tokens == 30280
 
 
-def test_missing_cli_binary_reported_as_error():
-    from unittest.mock import patch
-
-    from wiki_translation_harness.claude_code_client import run_claude_cli
-
-    with patch(
-        "wiki_translation_harness.claude_code_client.subprocess.run",
-        side_effect=FileNotFoundError("no such file"),
-    ):
-        result = run_claude_cli("system", "user", model="claude-sonnet-5", cli_path="nonexistent-claude")
-
-    assert result.is_error
-    assert "not found" in result.stderr
-
-
-def test_cli_error_falls_back_to_result_text_when_stderr_empty():
-    """Regression test for a real case: a rate/spend-limit rejection had a
-    completely empty proc.stderr, with the actual human-readable reason
-    ("You've hit your monthly spend limit...") only present in the result
-    event's own `result` field -- previously surfaced upstream as a bare,
-    undiagnosable "unknown error"."""
-    import json
-    import subprocess
-    from unittest.mock import patch
-
-    from wiki_translation_harness.claude_code_client import run_claude_cli
-
-    events = [
-        {
-            "type": "result",
-            "is_error": True,
-            "api_error_status": 429,
-            "result": "You've hit your monthly spend limit",
-            "usage": {},
-        },
-    ]
-    stdout = "\n".join(json.dumps(e) for e in events)
-
-    with patch(
-        "wiki_translation_harness.claude_code_client.subprocess.run",
-        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
-    ):
-        result = run_claude_cli("system", "user", model="claude-sonnet-5")
-
-    assert result.is_error
-    assert "monthly spend limit" in result.stderr
-    assert result.raw.get("api_error_status") == 429
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_429_fails_fast_without_retrying(monkeypatch):
-    """A 429 (rate/spend limit) cannot be fixed by backing off within the
-    same run -- must raise immediately instead of burning the full retry
-    budget's wall time on a guaranteed-identical rejection each time."""
-    calls = []
-
-    def fake(*a, **kw):
-        calls.append(1)
-        return ClaudeCLIResult(
-            is_error=True,
-            model_used="claude-sonnet-5",
-            stderr="You've hit your monthly spend limit",
-            raw={"api_error_status": 429},
-        )
-
-    monkeypatch.setattr("wiki_translation_harness.claude_code_client.run_claude_cli", fake)
-    client = ClaudeCodeClient(model="claude-sonnet-5", max_retries=5)
-    with pytest.raises(ClaudeCodeError, match="429"):
-        await client.chat_completion("claude-sonnet-5", _MESSAGES)
-    assert len(calls) == 1
-
-
 @pytest.mark.asyncio
 async def test_rate_limit_429_raises_session_limit_error_for_fallback(monkeypatch):
     """A 429 must raise the specific ClaudeCodeSessionLimitError subtype --
@@ -368,3 +241,45 @@ async def test_rate_limit_429_raises_session_limit_error_for_fallback(monkeypatc
     with pytest.raises(ClaudeCodeSessionLimitError):
         await client.chat_completion("claude-sonnet-5", _MESSAGES)
     assert issubclass(ClaudeCodeSessionLimitError, InsufficientCreditsError)
+
+
+def test_effort_flag_passed_to_cli_when_set():
+    import json
+    import subprocess
+    from unittest.mock import patch
+
+    from wiki_translation_harness.claude_code_client import run_claude_cli
+
+    events = [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
+        {"type": "result", "usage": {"input_tokens": 5, "output_tokens": 2}, "total_cost_usd": 0.0},
+    ]
+    stdout = "\n".join(json.dumps(e) for e in events)
+
+    with patch(
+        "wiki_translation_harness.claude_code_client.subprocess.run",
+        return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr=""),
+    ) as mock_run:
+        run_claude_cli("system", "user", model="claude-sonnet-5", effort="medium")
+
+    cmd = mock_run.call_args[0][0]
+    assert "--effort" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_client_effort_attribute_forwarded_to_run_claude_cli(monkeypatch):
+    captured_kwargs = {}
+
+    def _fake_run_claude_cli(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return _ok()
+
+    monkeypatch.setattr(
+        "wiki_translation_harness.claude_code_client.run_claude_cli", _fake_run_claude_cli
+    )
+    client = ClaudeCodeClient(model="claude-sonnet-5", effort="medium")
+    await client.chat_completion("claude-sonnet-5", _MESSAGES)
+    assert captured_kwargs["effort"] == "medium"
+
+

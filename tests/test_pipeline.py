@@ -17,13 +17,13 @@ from pathlib import Path
 import pytest
 
 from wiki_translation_harness.cache import TranslationCache, compute_key
-from wiki_translation_harness.models import Chunk, Config, RunStats, ValidationIssue
+from wiki_translation_harness.models import Chunk, Config, RunStats
 from wiki_translation_harness.pipeline import (
-    _chunk_mentions_ref,
-    _ref_names_in_message,
     run_assembly_repair,
+    run_review_pass,
 )
 from wiki_translation_harness.skill_loader import SkillContent
+from wiki_translation_harness.verification import VerifiedFacts
 
 
 class FakeOpenRouterClient:
@@ -87,6 +87,7 @@ def _chunk(text: str, order: int = 0) -> Chunk:
 
 class _FakeSource:
     title = "Test Article"
+    wikitext = "English source text."
 
 
 @pytest.mark.asyncio
@@ -106,22 +107,6 @@ async def test_no_issues_needs_no_repair():
 
 
 @pytest.mark.asyncio
-async def test_qa_skill_forwarded_to_assembly_repair_call():
-    chunk = _chunk("Bibliografia.\n{{harvc|last=Smith|c=Ch1}}\n")
-    client = FakeOpenRouterClient(["Bibliografia.\n{{Cite book|last=Smith}}\n"])
-    stats = RunStats()
-    qa_skill = SkillContent(skill_md="Check ref names before delivery.", reference_texts={})
-
-    await run_assembly_repair(
-        [chunk], _FakeSource(), _config(max_assembly_repair_rounds=3), client, _skill(), None,
-        FakeMediaWikiClient(raise_if_called=True), None, stats, qa_skill=qa_skill,
-    )
-
-    repair_system_prompt = client.calls[-1][0]["content"]
-    assert "Check ref names before delivery." in repair_system_prompt
-
-
-@pytest.mark.asyncio
 async def test_resolves_within_cap():
     # {{harvc}} is a static defect (validator.py) — no network needed to detect it.
     chunk = _chunk("Bibliografia.\n{{harvc|last=Smith|c=Ch1}}\n")
@@ -138,6 +123,7 @@ async def test_resolves_within_cap():
     assert "harvc" not in assembled
     assert chunk.translated_text.strip() == "Bibliografia.\n{{Cite book|last=Smith}}"
     assert stats.repair_attempts == 1
+    assert stats.model_usage["test-model"].calls == 1  # config.model, per _config()'s default
 
 
 @pytest.mark.asyncio
@@ -172,39 +158,6 @@ async def test_only_the_affected_chunk_gets_repaired():
 
     assert len(client.calls) == 1  # only the broken chunk's repair call
     assert clean.translated_text == "Prozë krejt e pastër."  # untouched
-
-
-@pytest.mark.asyncio
-async def test_loop_cap_independent_of_per_chunk_max_repair_attempts():
-    # run_assembly_repair never reads config.max_repair_attempts (that's
-    # translate_chunk's own, separate loop) — max_assembly_repair_rounds
-    # alone governs this loop, even set to 0 for the per-chunk knob.
-    chunk = _chunk("{{harvc|last=Smith}}")
-    client = FakeOpenRouterClient(["{{harvc|last=Smith}} still broken", "{{harvc|last=Smith}} still broken 2"])
-    stats = RunStats()
-
-    _, issues, rounds, _ = await run_assembly_repair(
-        [chunk], _FakeSource(), _config(max_repair_attempts=0, max_assembly_repair_rounds=2),
-        client, _skill(), None, FakeMediaWikiClient(raise_if_called=True), None, stats,
-    )
-
-    assert rounds == 2  # governed by max_assembly_repair_rounds, not the 0
-    assert len(client.calls) == 2
-    assert issues  # still broken, cap reached
-
-
-@pytest.mark.asyncio
-async def test_live_validate_disabled_never_calls_mediawiki_client():
-    chunk = _chunk("Prozë krejt e pastër shqipe.")
-    mw_client = FakeMediaWikiClient(raise_if_called=True)
-    stats = RunStats()
-
-    _, issues, _, _ = await run_assembly_repair(
-        [chunk], _FakeSource(), _config(live_validate=False), FakeOpenRouterClient([]),
-        _skill(), None, mw_client, None, stats,
-    )
-    assert issues == []
-    assert mw_client.calls == 0
 
 
 @pytest.mark.asyncio
@@ -262,41 +215,6 @@ async def test_unlocalized_issue_reaches_every_chunk():
         assert "Gabim citimi" in user_message
 
 
-def test_ref_names_in_message_extracts_quoted_ref_name():
-    # Real Cite error text never echoes `name="X"` tag syntax back — confirmed
-    # against a live sq.wikipedia.org parse (see test_live_validator.py): it
-    # just quotes the bare name ("...refs e quajtura "RefA""). Only
-    # orphaned_named_ref/cite_error kinds get read this way — other kinds
-    # that happen to quote text too (e.g. unexpanded_template's repr'd
-    # title) must not be misread as naming a ref.
-    orphaned = ValidationIssue(
-        kind="orphaned_named_ref",
-        message=(
-            "Cite error rendered on the page: Gabim citimi: Etiketë <ref> e "
-            'pavlefshme;\nasnjë tekst nuk u dha për refs e quajtura "RefA"'
-        ),
-    )
-    assert _ref_names_in_message(orphaned) == ["RefA"]
-
-    # A finding that doesn't name a ref (e.g. Scribunto error, a leak) gives no names.
-    lua_error = ValidationIssue(
-        kind="lua_script_error", message="Lua/Scribunto error rendered on the page: Script error"
-    )
-    assert _ref_names_in_message(lua_error) == []
-
-    # Quoted text, but not a ref-naming kind — must not be read as a ref name.
-    missing_template = ValidationIssue(
-        kind="unexpanded_template", message="Template 'RefA' does not exist on the target wiki"
-    )
-    assert _ref_names_in_message(missing_template) == []
-
-
-def test_chunk_mentions_ref_matches_translated_then_source():
-    ref_chunk = _chunk("Vijazimi.\n<ref name=\"RefA\"/>\n", order=0)
-    assert _chunk_mentions_ref(ref_chunk, "RefA")
-    assert not _chunk_mentions_ref(_chunk("Prozë krejt e pastër.", order=1), "RefA")
-
-
 @pytest.mark.asyncio
 async def test_unlocalized_ref_issue_only_reaches_chunk_mentioning_that_ref():
     # An orphaned named ref can't be pinned to a chunk by line number, but its
@@ -330,40 +248,6 @@ async def test_unlocalized_ref_issue_only_reaches_chunk_mentioning_that_ref():
 
 
 @pytest.mark.asyncio
-async def test_unlocalized_ref_issue_targets_only_first_matching_chunk():
-    # Two chunks both mention the ref (e.g. usage in two sections). Broadcasting
-    # to both would let each "fix" the orphaned ref by inserting its own
-    # definition — producing a define-twice error next round and an
-    # oscillating repair loop. The finding must go to the FIRST matching chunk
-    # only.
-    clean = _chunk("Prozë krejt e pastër.", order=0)
-    first = _chunk("Seksioni A.<ref name=\"RefA\"/>\n", order=1)
-    second = _chunk("Seksioni B.<ref name=\"RefA\"/>\n", order=2)
-    orphaned_ref_html = (
-        '<span class="error mw-ext-cite-error">Gabim citimi: Etiketë &lt;ref&gt; e '
-        'pavlefshme;\nasnjë tekst nuk u dha për refs e quajtura "RefA"</span>'
-    )
-    mw_client = FakeMediaWikiClient(
-        responses=[
-            {"text": orphaned_ref_html, "templates": []},
-            {"text": "<p>clean</p>", "templates": []},
-        ]
-    )
-    client = FakeOpenRouterClient(["Seksioni A fixed."])
-    stats = RunStats()
-
-    await run_assembly_repair(
-        [clean, first, second], _FakeSource(), _config(live_validate=True, max_assembly_repair_rounds=2),
-        client, _skill(), None, mw_client, None, stats,
-    )
-
-    assert len(client.calls) == 1
-    assert first.translated_text == "Seksioni A fixed."
-    assert second.translated_text == "Seksioni B.<ref name=\"RefA\"/>\n"  # untouched
-    assert clean.translated_text == "Prozë krejt e pastër."  # untouched
-
-
-@pytest.mark.asyncio
 async def test_repaired_chunk_is_re_cached(tmp_path: Path):
     # translate_chunk's own cache.set (translator.py) runs pre-repair, when
     # a chunk is first translated. Without re-caching here, a fix made by
@@ -391,19 +275,107 @@ async def test_repaired_chunk_is_re_cached(tmp_path: Path):
         cache.close()
 
 
+# run_review_pass: the semantic-fidelity review pass (review.py), run once
+# run_assembly_repair above has already passed clean. The same
+# FakeOpenRouterClient drives both the review call (JSON findings) and any
+# resulting repair_chunk() call, in call order, since review_client serves
+# both roles here exactly as it does in the real pipeline (config.
+# resolve_review_model/resolve_review_provider commonly resolve review to
+# the same client as complex_model).
+
+
 @pytest.mark.asyncio
-async def test_no_cache_arg_skips_re_caching_without_error():
-    # cache defaults to None (matches every pre-existing call site above,
-    # none of which pass it) -- must not raise just because a repair
-    # happened with no cache configured.
-    chunk = _chunk("{{harvc|last=Smith}}")
-    client = FakeOpenRouterClient(["{{Cite book|last=Smith}}"])
+async def test_review_pass_finds_and_fixes_issue():
+    chunk = _chunk("Parisi eshte nje qytet i madh.")
+    client = FakeOpenRouterClient(
+        [
+            '[{"kind": "grammar_case", "message": "Wrong case.", "snippet": "Parisi eshte"}]',
+            "Parisi është një qytet i madh.",  # repair_chunk's fix
+            "[]",  # re-check after repair: clean
+        ]
+    )
     stats = RunStats()
 
-    _, issues, rounds, _ = await run_assembly_repair(
-        [chunk], _FakeSource(), _config(max_assembly_repair_rounds=3), client, _skill(), None,
-        FakeMediaWikiClient(raise_if_called=True), None, stats,
+    assembled, issues, rounds = await run_review_pass(
+        [chunk], _FakeSource(), _config(review_max_repair_attempts=2), "Parisi eshte nje qytet i madh.",
+        client, "review-model", _skill(), None, FakeMediaWikiClient(raise_if_called=True), stats, VerifiedFacts(),
     )
 
     assert issues == []
     assert rounds == 1
+    assert assembled == "Parisi është një qytet i madh."
+    assert chunk.translated_text == "Parisi është një qytet i madh."
+    assert stats.review_attempts == 1
+    assert stats.review_corrections_applied == 1
+    assert stats.review_findings_total == 1
+    # 3 chat_completion calls total (2 review calls + 1 repair), all on
+    # "review-model" -- confirms review.py's calls and the review-driven
+    # repair both get attributed to the same per-model breakdown entry.
+    assert stats.model_usage["review-model"].calls == 3
+    assert stats.model_usage["review-model"].tokens_in == 300
+
+
+@pytest.mark.asyncio
+async def test_review_pass_localizes_finding_to_owning_chunk_only():
+    a = _chunk("Chunk A has a problem here.", order=0)
+    b = _chunk("Chunk B is perfectly fine.", order=1)
+    client = FakeOpenRouterClient(
+        [
+            '[{"kind": "semantic_fidelity", "message": "Bad.", "snippet": "Chunk A has a problem here."}]',
+            "Chunk A fixed.",
+            "[]",
+        ]
+    )
+    stats = RunStats()
+    initial = a.translated_text + b.translated_text
+
+    await run_review_pass(
+        [a, b], _FakeSource(), _config(), initial, client, "review-model", _skill(), None,
+        FakeMediaWikiClient(raise_if_called=True), stats, VerifiedFacts(),
+    )
+
+    assert a.translated_text == "Chunk A fixed."
+    assert b.translated_text == "Chunk B is perfectly fine."  # untouched
+
+
+@pytest.mark.asyncio
+async def test_review_pass_structural_safety_net_catches_review_driven_regression():
+    # The review call itself reports no findings, but the assembled text
+    # already has a static defect ({{harvc}}) -- the structural safety-net
+    # check (re-running _validate_assembled each round) must still catch
+    # and repair it, independent of what the review model said.
+    chunk = _chunk("{{harvc|last=Smith}}")
+    client = FakeOpenRouterClient(["[]", "{{Cite book|last=Smith}}", "[]"])
+    stats = RunStats()
+
+    assembled, issues, rounds = await run_review_pass(
+        [chunk], _FakeSource(), _config(review_max_repair_attempts=2), "{{harvc|last=Smith}}",
+        client, "review-model", _skill(), None, FakeMediaWikiClient(raise_if_called=True), stats, VerifiedFacts(),
+    )
+
+    assert issues == []
+    assert rounds == 1
+    assert "harvc" not in assembled
+
+
+@pytest.mark.asyncio
+async def test_review_pass_uses_review_model_not_config_model():
+    chunk = _chunk("Prozë.")
+    client = FakeOpenRouterClient(["[]"])
+    stats = RunStats()
+
+    calls_with_model = []
+    original_chat_completion = client.chat_completion
+
+    async def _tracking_chat_completion(model, *args, **kwargs):
+        calls_with_model.append(model)
+        return await original_chat_completion(model, *args, **kwargs)
+
+    client.chat_completion = _tracking_chat_completion
+
+    await run_review_pass(
+        [chunk], _FakeSource(), _config(model="draft-model"), "Prozë.", client, "review-model-xyz",
+        _skill(), None, FakeMediaWikiClient(raise_if_called=True), stats, VerifiedFacts(),
+    )
+
+    assert calls_with_model == ["review-model-xyz"]

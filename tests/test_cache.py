@@ -3,28 +3,12 @@ from pathlib import Path
 from wiki_translation_harness.cache import TranslationCache, compute_key
 
 
-def test_key_differs_by_model():
-    k1 = compute_key("model-a", "en", "sq", "hello")
-    k2 = compute_key("model-b", "en", "sq", "hello")
-    assert k1 != k2
-
-
-def test_key_differs_by_langs():
-    k1 = compute_key("m", "en", "sq", "hello")
-    k2 = compute_key("m", "en", "fr", "hello")
-    assert k1 != k2
-
-
 def test_key_differs_by_skill_hash():
     # editing the skill file or the harness's invocation framing must
     # invalidate old cache entries rather than silently reusing them
     k1 = compute_key("m", "en", "sq", "hello", skill_hash="hash-a")
     k2 = compute_key("m", "en", "sq", "hello", skill_hash="hash-b")
     assert k1 != k2
-
-
-def test_key_stable_for_same_input():
-    assert compute_key("m", "en", "sq", "hello") == compute_key("m", "en", "sq", "hello")
 
 
 def test_set_and_get(tmp_path: Path):

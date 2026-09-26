@@ -127,6 +127,31 @@ def build_config(
     return config
 
 
+def resolve_complex_provider(config: Config) -> str:
+    """Provider that should serve config.complex_model calls -- explicit
+    complex_provider if set, else the primary provider (today's
+    single-client behavior, preserved when nobody opts into a second
+    provider). See engines.build_client_pool."""
+    return config.complex_provider or config.provider
+
+
+def resolve_review_model(config: Config) -> str | None:
+    """The model that should perform the semantic-review pass --
+    config.review_model if set, else config.complex_model (so a run that
+    already configured a stronger complex-chunk model gets review "for
+    free" on that same model). None means neither is set: review is
+    disabled. See pipeline.run_review_pass."""
+    return config.review_model or config.complex_model
+
+
+def resolve_review_provider(config: Config) -> str:
+    """Provider that should serve the review model -- config.review_provider
+    if set, else resolve_complex_provider(config) (the same inheritance
+    chain review_model follows). Only meaningful when
+    resolve_review_model(config) is not None; harmless to call otherwise."""
+    return config.review_provider or resolve_complex_provider(config)
+
+
 def resolve_llm_endpoint(config: Config) -> tuple[str, str, str]:
     """Returns (base_url, api_key, model) for whichever provider is configured."""
     if config.provider == "local":

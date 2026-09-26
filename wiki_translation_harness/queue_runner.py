@@ -91,6 +91,10 @@ async def run_queue_mode(
             except queue_lib.QueueSyncError as sync_exc:
                 logger.error("Could not push FAILED result for %s: %s", url, sync_exc)
             stats.articles_failed += 1
+            # Whatever tokens/cost this article burned before crashing are
+            # still real spend -- merge them in even on the failure path,
+            # not just on success (see RunStats.merge_usage_from).
+            stats.merge_usage_from(article_stats.stats)
             processed += 1
             continue
 
@@ -105,6 +109,12 @@ async def run_queue_mode(
             queue_lib.finish_line(queue_repo_dir, line_no, url, status_line, reason=reason)
         except queue_lib.QueueSyncError as sync_exc:
             logger.error("Could not push %s result for %s: %s", status, url, sync_exc)
+        # Each article gets its own fresh RunStats from run_pipeline (and
+        # its own stats.json, overwritten per article) -- without this, the
+        # queue-run-level stats_tracker returned below would never see any
+        # article's tokens/cost/per-model usage at all, and the CLI's final
+        # "Estimated cost: $X" line would always print $0.
+        stats.merge_usage_from(article_stats.stats)
         processed += 1
 
     return stats_tracker

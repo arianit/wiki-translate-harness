@@ -377,6 +377,67 @@ All of these are individually toggleable in config.yaml
 (`fill_citation_languages`, `fix_citation_param_names`,
 `dedupe_short_footnotes`, `verify_links`).
 
+## Hybrid model routing & semantic review
+
+Three model/provider tiers, each optional and independently configurable —
+the common case (nothing below set) is a single model on a single provider,
+exactly as before:
+
+- **Draft** (`model` / `provider`): translates ordinary body-text chunks.
+- **Complex** (`complex_model` / `complex_provider`): structurally complex
+  chunks (infoboxes, large tables, dense reference lists — see
+  `parser.classify_chunk_complexity`) are routed here instead, at draft
+  time. `complex_provider` only needs setting when it should differ from
+  `provider` (e.g. a cheap draft tier on `opencode_go`, complex chunks on a
+  stronger model via `claude_code`); left unset, complex chunks just use a
+  different model on the same client.
+- **Review** (`review_model` / `review_provider`): an independent
+  semantic-fidelity pass. Once an article's structural repair
+  (`max_assembly_repair_rounds`) passes clean, the whole assembled article
+  is handed to this model alongside the English source — for the first
+  time, with no memory of having drafted it — looking for mistranslation,
+  hallucinated or dropped facts, target-language grammar errors, and
+  named-entity/transliteration inconsistency across the whole article (the
+  one class of defect a translator working section-by-section cannot
+  self-audit). This is a genuinely different kind of check from `wikiqa`
+  (the same model/session grepping its own output for known defect
+  patterns) and from `benchmark`'s judge model (which ranks several
+  candidate translations against each other, not one translation against
+  its source).
+
+  Findings are localized to the chunk(s) they came from and repaired the
+  same way structural findings are (`repair_chunk`), capped at
+  `review_max_repair_attempts` rounds. Unlike an unresolved *structural*
+  defect (which withholds the `.wiki` file entirely —
+  `needs_human_review.json`), unresolved *review* findings do **not** block
+  delivery: the article is still saved, with a companion
+  `{title}.review-flags.md` alongside it and a "Semantic review" section in
+  the article's `.report.md`, since this harness never auto-publishes —
+  every output file is a human's paste-ready draft, and a fidelity concern
+  is a spot-check prompt, not a publish blocker.
+
+  `review_model` defaults to `complex_model` when unset (and
+  `review_provider` to `complex_provider`, then `provider`) — a config that
+  already set a stronger `complex_model` gets review "for free" on that
+  same model, since the two roles commonly share one higher-quality model.
+
+Only one extra provider client is ever built beyond the primary one, no
+matter how many of these are set to a different provider — every engine
+client accepts `model` as a per-call argument rather than binding to a
+fixed model, so two tiers on the *same* provider always share one client;
+a second client is only built for a tier that's on a genuinely different
+provider (see `engines.build_client_pool`).
+
+**Per-model spend**: `stats.json`'s `model_usage` field breaks tokens/cost
+down by the exact model id each call actually used (see
+`RunStats.record_usage`), so you can see e.g. how much the cheap draft
+model spent vs. the stronger complex/review model instead of only one
+lumped total. Both `wiki-translation-harness` and `wiki-translation-harness
+queue` also print a "Per-model usage" summary at the end of the run;
+`queue` aggregates it across every article processed that run (each
+article gets its own fresh stats internally — see
+`RunStats.merge_usage_from`).
+
 ## Reports
 
 Every completed article gets `output/Article_Name.report.md`: link/template

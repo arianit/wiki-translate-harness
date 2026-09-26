@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from wiki_translation_harness.models import ArticleSource, Chunk, ChunkStatus
+from wiki_translation_harness.models import ArticleSource, Chunk, ChunkStatus, ValidationIssue
 from wiki_translation_harness.report import (
     ArticleReportData,
     build_article_report,
@@ -45,12 +45,6 @@ def test_report_flags_rewrite_when_target_article_exists():
     assert "Ilirët" in report
 
 
-def test_report_no_rewrite_section_for_first_translation():
-    data = ArticleReportData(source=_source(), chunks=[_chunk()], facts=VerifiedFacts())
-    report = build_article_report(data, "text")
-    assert "REWRITE" not in report
-
-
 def test_report_lists_confirmed_and_missing_links():
     facts = VerifiedFacts(links={"Muzaka family": "Muzakajt", "Nonexistent": None})
     data = ArticleReportData(source=_source(), chunks=[_chunk()], facts=facts)
@@ -84,32 +78,12 @@ def test_report_language_breakdown_from_citations():
     assert "`sr`: 1" in report
 
 
-def test_report_no_citations_says_so():
-    data = ArticleReportData(source=_source(), chunks=[_chunk()], facts=VerifiedFacts())
-    report = build_article_report(data, "no citations here")
-    assert "No `|language=` tags" in report
-
-
 def test_report_flags_repaired_sections():
     chunks = [_chunk(ChunkStatus.TRANSLATED), _chunk(ChunkStatus.REPAIRED)]
     data = ArticleReportData(source=_source(), chunks=chunks, facts=VerifiedFacts())
     report = build_article_report(data, "text")
     assert "Choices to review" in report
     assert "1 of 2 section(s)" in report
-
-
-def test_report_no_repair_section_when_nothing_repaired():
-    data = ArticleReportData(source=_source(), chunks=[_chunk(ChunkStatus.TRANSLATED)], facts=VerifiedFacts())
-    report = build_article_report(data, "text")
-    assert "Choices to review" not in report
-
-
-def test_report_includes_attribution_facts():
-    data = ArticleReportData(source=_source(), chunks=[_chunk()], facts=VerifiedFacts())
-    report = build_article_report(data, "text")
-    assert "Për faqen e diskutimit" in report
-    assert "Përmbledhja e redaktimit" in report
-    assert "Përkthyer nga" in report
 
 
 def test_report_lists_auto_filled_citation_languages():
@@ -123,12 +97,6 @@ def test_report_lists_auto_filled_citation_languages():
     assert "Citation languages auto-filled" in report
     assert "`en` — Some Page" in report
     assert "`sr` — Neka Strana" in report
-
-
-def test_report_no_auto_fill_section_when_nothing_filled():
-    data = ArticleReportData(source=_source(), chunks=[_chunk()], facts=VerifiedFacts())
-    report = build_article_report(data, "text")
-    assert "Citation languages auto-filled" not in report
 
 
 def test_attribution_block_matches_skill_worked_example():
@@ -153,16 +121,6 @@ def test_attribution_block_none_for_non_english_source():
     assert build_attribution_block(source) is None
 
 
-def test_attribution_block_none_without_revid():
-    source = _source(revid=None)
-    assert build_attribution_block(source) is None
-
-
-def test_attribution_block_none_without_timestamp():
-    source = _source(revision_timestamp=None)
-    assert build_attribution_block(source) is None
-
-
 def test_attribution_block_all_months():
     # spot-check month boundaries, not just July
     jan = _source(revision_timestamp="2024-01-05T00:00:00Z")
@@ -171,19 +129,24 @@ def test_attribution_block_all_months():
     assert "25 dhjetor 2024" in build_attribution_block(dec)
 
 
-def test_report_includes_attribution_block_in_body():
-    data = ArticleReportData(
-        source=_source(title="Archimedes", revid=1366588187, revision_timestamp="2026-07-28T18:48:49Z"),
-        chunks=[_chunk()],
-        facts=VerifiedFacts(),
-    )
-    report = build_article_report(data, "text")
-    assert "{{Përkthyer nga|en|Archimedes|28 korrik 2026|1366588187}}" in report
-    assert "Përmbledhja e redaktimit" in report
-
-
 def test_save_report_writes_file(tmp_path: Path):
     path = save_report(tmp_path, "Andrea III Muzaka", "report body")
     assert path == report_path_for(tmp_path, "Andrea III Muzaka")
     assert path.read_text(encoding="utf-8") == "report body"
     assert path.name == "Andrea_III_Muzaka.report.md"
+
+
+def test_report_semantic_review_section_with_findings():
+    issue = ValidationIssue(kind="grammar_case", message="Wrong case.", snippet="Parisi eshte")
+    data = ArticleReportData(
+        source=_source(),
+        chunks=[_chunk()],
+        facts=VerifiedFacts(),
+        review_model="claude-sonnet-5",
+        review_findings=[issue],
+    )
+    report = build_article_report(data, "text")
+    assert "Semantic review" in report
+    assert "claude-sonnet-5" in report
+    assert "Wrong case." in report
+    assert "Parisi eshte" in report

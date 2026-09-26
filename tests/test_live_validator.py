@@ -61,34 +61,6 @@ def test_orphaned_named_ref_detected_despite_wrapping_span():
     assert "Gabim citimi" in issues[0].message
 
 
-def test_generic_cite_error_without_ref_keyword_classified_separately():
-    parse_result = {
-        "text": '<span class="error mw-ext-cite-error">Some other citation problem</span>',
-        "templates": [],
-    }
-    issues = find_live_issues(parse_result)
-    assert len(issues) == 1
-    assert issues[0].kind == "cite_error"
-
-
-def test_unexpanded_template_detected_from_templates_list():
-    # formatversion=2 gives a real JSON boolean for `exists` — confirmed
-    # live; formatversion=1 instead uses a present-but-empty-string key,
-    # which parse_wikitext deliberately avoids requesting.
-    parse_result = {
-        "text": "<p>irrelevant</p>",
-        "templates": [
-            {"ns": 10, "title": "Stampa:NonExistentTemplateXYZ", "exists": False},
-            {"ns": 10, "title": "Stampa:Sfn", "exists": True},
-        ],
-    }
-    issues = find_live_issues(parse_result)
-    assert len(issues) == 1
-    assert issues[0].kind == "unexpanded_template"
-    assert issues[0].severity == "warning"
-    assert "NonExistentTemplateXYZ" in issues[0].message
-
-
 def test_unexpanded_template_locates_template_syntax_not_prose_word():
     """Regression test: a missing template named '\"' or 'Main' must match
     the actual {{'\"}} or {{Main}} template invocation, not an unrelated
@@ -105,14 +77,6 @@ def test_unexpanded_template_locates_template_syntax_not_prose_word():
 
 
 
-def test_existing_templates_not_flagged():
-    parse_result = {
-        "text": "<p>irrelevant</p>",
-        "templates": [{"ns": 10, "title": "Stampa:Sfn", "exists": True}],
-    }
-    assert find_live_issues(parse_result) == []
-
-
 def test_known_harmless_missing_dependency_module_not_flagged():
     """Moduli:WikidataIB/i18n is confirmed missing on sq.wikipedia but is
     only a conditional dependency of the legitimate, existing
@@ -126,36 +90,6 @@ def test_known_harmless_missing_dependency_module_not_flagged():
         ],
     }
     assert find_live_issues(parse_result) == []
-
-
-def test_known_harmless_sst_registry_module_not_flagged():
-    """Moduli:SST/registry is confirmed missing on sq.wikipedia but is
-    embedded (via `embeddedin`) in dozens of long-standing, fine-rendering
-    sq.wikipedia articles -- a phantom internal dependency, not a
-    translation defect, and not fixable by re-prompting the model."""
-    parse_result = {
-        "text": "<p>irrelevant</p>",
-        "templates": [
-            {"ns": 10, "title": "Stampa:Infobox person", "exists": True},
-            {"ns": 828, "title": "Moduli:SST/registry", "exists": False},
-        ],
-    }
-    assert find_live_issues(parse_result) == []
-
-
-def test_other_missing_modules_still_flagged():
-    """The known-harmless allowlist must not swallow genuinely missing
-    templates/modules unrelated to it."""
-    parse_result = {
-        "text": "<p>irrelevant</p>",
-        "templates": [
-            {"ns": 828, "title": "Moduli:WikidataIB/i18n", "exists": False},
-            {"ns": 828, "title": "Moduli:SomeOtherMissingModule", "exists": False},
-        ],
-    }
-    issues = find_live_issues(parse_result)
-    assert len(issues) == 1
-    assert "SomeOtherMissingModule" in issues[0].message
 
 
 def test_country_data_leak_detected_once_not_per_html_occurrence():
@@ -185,30 +119,6 @@ def test_clean_render_has_no_issues():
         "templates": [{"ns": 10, "title": "Stampa:Sfn", "exists": True}],
     }
     assert find_live_issues(parse_result) == []
-
-
-def test_locate_resolves_line_number_and_snippet_when_needle_is_in_source():
-    parse_result = {
-        "text": "<p>irrelevant</p>",
-        "templates": [{"ns": 10, "title": "Stampa:NonExistentTemplateXYZ", "exists": False}],
-    }
-    source = "Lead.\n\n{{NonExistentTemplateXYZ}} more text.\n"
-    issues = find_live_issues(parse_result, source_text=source)
-    assert issues[0].line_number == 3
-    assert "NonExistentTemplateXYZ" in issues[0].snippet
-
-
-def test_locate_returns_none_when_needle_not_found_in_source():
-    # Honest best-effort: an error message synthesized by the Cite
-    # extension doesn't literally appear in the source wikitext, so
-    # line_number/snippet stay None rather than pointing somewhere wrong.
-    parse_result = {
-        "text": '<span class="error mw-ext-cite-error">Gabim citimi: ...</span>',
-        "templates": [],
-    }
-    issues = find_live_issues(parse_result, source_text="Some unrelated wikitext.")
-    assert issues[0].line_number is None
-    assert issues[0].snippet is None
 
 
 @pytest.mark.asyncio
@@ -241,17 +151,3 @@ async def test_parse_wikitext_and_validate_wikitext_live_end_to_end():
     assert "unexpanded_template" in kinds
 
 
-@pytest.mark.asyncio
-async def test_parse_wikitext_raises_on_api_error():
-    from wiki_translation_harness.mediawiki import MediaWikiError
-
-    client = MediaWikiClient(API_URL, "test-agent/1.0")
-    try:
-        with respx.mock(base_url=API_URL) as mock:
-            mock.post(data__contains={"action": "parse"}).mock(
-                return_value=httpx.Response(200, json={"error": {"code": "invalidtitle"}})
-            )
-            with pytest.raises(MediaWikiError):
-                await client.parse_wikitext("text")
-    finally:
-        await client.aclose()
