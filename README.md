@@ -114,7 +114,7 @@ Add a language code before the title, or paste the full Wikipedia link:
 
 ```bash
 wiki-translation-harness --title "de:Prizren"
-wiki-translation-harness --title "https://sr.wikipedia.org/wiki/Призрен"
+wiki-translation-harness --title "https://fr.wikipedia.org/wiki/Prizren"
 ```
 
 Without a prefix, `source_lang` from config.yaml is used (default `en`).
