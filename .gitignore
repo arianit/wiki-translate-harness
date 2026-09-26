@@ -4,7 +4,11 @@ __pycache__/
 *.egg-info/
 config.yaml
 config.local.yaml
+config.*.yaml
+!config.example.yaml
+titles*.txt
 output/
+partial_output/
 cache/
 logs/
 quality/
@@ -15,4 +19,6 @@ stats.json
 .claude/
 albanian_mythology*
 filter_existing.py
+tmp_scratch/
+*.tmp
 
