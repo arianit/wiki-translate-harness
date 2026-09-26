@@ -360,6 +360,18 @@ compliance with an instruction:
 - **Citation parameter name fix**: renames known mistranslated CS1 parameter
   names back to English (`|titulli=` → `|title=`, `|botues=` → `|publisher=`,
   etc.), covering inflected and numbered-variant forms.
+- **Sfn/harvnb parameter name fix**: `{{sfn}}`/`{{harvnb}}` only understand
+  positional params 1=author, 2=year — everything else must be named, so a
+  mistranslated `|f=`/`|ff=` (Albanian "faqe"/pages) or a positional value
+  like `f. 161` is rewritten to the named `|p=`/`|pp=` the template actually
+  reads.
+- **Redundant `<ref>` unwrap**: `{{sfn}}`/`{{sfnp}}`/`{{sfnm}}` already expand
+  to their own `<ref name="FOOTNOTE...">...</ref>` internally, so a model
+  wrapping one in an extra outer `<ref>...</ref>` nests a ref inside a ref —
+  confirmed live on sq.wikipedia to corrupt Cite's usage-tracking for the
+  auto-generated name. Only a *bare* wrapper (no `name=`, no other content)
+  is unwrapped; `{{harvnb}}`/`{{harv}}`/`{{harvp}}` don't self-wrap and are
+  left alone. Always on, not config-toggleable.
 - **Short-footnote dedup**: `{{sfn}}`/`{{harvnb}}` auto-generate a shared
   anchor from author+year+page. The same source citation split across two
   independently-translated chunks can come back with its `|ps=` quote
@@ -373,9 +385,11 @@ compliance with an instruction:
   content to translate. Treated as a validation failure, triggering the
   same repair-then-fail path as a structural syntax error.
 
-All of these are individually toggleable in config.yaml
+Citation language fill, citation parameter name fix, short-footnote dedup,
+and link verification are individually toggleable in config.yaml
 (`fill_citation_languages`, `fix_citation_param_names`,
-`dedupe_short_footnotes`, `verify_links`).
+`dedupe_short_footnotes`, `verify_links`). The sfn/harvnb parameter fix and
+the redundant-`<ref>` unwrap always run.
 
 ## Hybrid model routing & semantic review
 
