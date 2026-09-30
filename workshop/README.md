@@ -14,8 +14,8 @@ You need Python 3.10+, `git`, and [Claude Code](https://docs.claude.com/en/docs/
 (`claude`), logged in. The `claude` cells do not work without it.
 
 ```bash
-git clone https://github.com/arianit/wiki-translate-workshop
-cd wiki-translate-workshop
+git clone https://github.com/arianit/wiki-translate-harness
+cd wiki-translate-harness/workshop
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 jupyter lab workshop-walkthrough.ipynb
