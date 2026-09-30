@@ -87,6 +87,7 @@ def build_llm_client(config: Config) -> tuple[LLMEngineClient, str]:
         timeout=config.request_timeout_s,
         max_retries=config.max_retries,
         provider=config.provider,
+        disable_reasoning=config.disable_reasoning,
     )
     return client, model
 

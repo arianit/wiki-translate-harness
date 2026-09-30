@@ -328,6 +328,55 @@ Example results for "Enji (deity)" are in
 `google/gemini-2.5-flash` matched its quality and was about 3× faster at
 twice the price.
 
+### September 2026 re-run: Enji (deity)
+
+The same article re-benchmarked on 2026-09-30 with current models, run through
+three engines (`claude_code`, `opencode_go`, `openrouter`) and judged blind by
+**two** independent judges, Grok 4.7 (`opencode-go/grok-4.7`) and GPT-6 Sol
+(`openai/gpt-6-sol`), each seeing the four translations under a different
+random A-D labelling. Per-chunk translation only: no complex/review tier, no
+fallback provider, translation cache off, `opencode_go` pinned to a
+tools-disabled agent.
+
+| Model | Engine | Grok 4.7 | GPT-6 Sol | Runtime | Tokens in / out | Cost |
+|---|---|---|---|---|---|---|
+| **deepseek-v4.1-flash** | opencode_go | **7** | **7** | 543 s | 265k / 23k | $0.12 |
+| deepseek-v4-pro | opencode_go | 6 | 6 | 912 s | 301k / 21k | $0.54 |
+| claude-sonnet-5-5 | claude_code | 6 | 5 | 148 s | 460k / 31k | not reported |
+| qwen3.6-27b (reasoning off) | openrouter | 3 | 2 | 430 s | 287k / 26k | $0.09 |
+| glm-5.3 | opencode_go | failed | failed | - | - | - |
+
+Both judges produced the same ranking: **deepseek-v4.1-flash > deepseek-v4-pro >
+claude-sonnet-5-5 > qwen3.6-27b**. Per-criterion scores (accuracy / Albanian /
+terminology / MediaWiki / publication readiness):
+
+| Model | Grok 4.7 | GPT-6 Sol |
+|---|---|---|
+| deepseek-v4.1-flash | 8 / 8 / 8 / 7 / 7 | 8 / 7 / 7 / 7 / 7 |
+| deepseek-v4-pro | 6 / 8 / 8 / 5 / 5 | 7 / 8 / 8 / 5 / 6 |
+| claude-sonnet-5-5 | 6 / 7 / 6 / 7 / 5 | 7 / 5 / 5 / 7 / 5 |
+| qwen3.6-27b | 3 / 3 / 3 / 4 / 2 | 4 / 2 / 2 / 3 / 2 |
+
+Judge cost: $0.27 (Grok) and $0.26 (GPT-6 Sol). What the judges said:
+deepseek-v4.1-flash kept the full lead and translated the quotations; its
+remaining problems were copyediting and template cleanup. deepseek-v4-pro had
+the best prose but truncated the lead and split the bibliography. Sonnet left
+two long quotations in English and rendered `drangue` as `dragua`. Qwen had
+repeated sense errors, garbled word forms, and stray Cyrillic characters.
+
+Caveats: one article, and the gap between the top three is small. Sonnet ran
+without the repair/review passes the full pipeline adds, so this understates it.
+**glm-5.3** never produced output through OpenCode Go: on the ~18k-token skill
+prompt it stalls or reasons for many minutes, and it tries to call tools (the
+skill text reads like agent instructions), which the locked-down agent blocks.
+**qwen3.6-27b** only completes with `disable_reasoning: true`; by default it
+spends its whole output budget on hidden reasoning (9,000 of 9,000 tokens, no
+content) and the request times out and retries. The two judges were run by a
+one-off script that merges the per-engine results into one blind pass (the
+`benchmark` command takes a single `--provider` and the built-in judge handles
+at most four translations through OpenRouter only). Raw outputs are under
+`quality/2026-09-30/` (gitignored).
+
 ## Reliability
 
 Every network call has a hard `asyncio.wait_for` deadline on top of the

@@ -123,6 +123,25 @@ async def test_experiential_request_carries_safety_identifier():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "disable_reasoning,provider,expected",
+    [(True, "openrouter", {"enabled": False}), (False, "openrouter", None), (True, "local", None)],
+)
+async def test_disable_reasoning_only_sent_when_enabled_on_openrouter(disable_reasoning, provider, expected):
+    with respx.mock(base_url=BASE_URL) as mock:
+        route = mock.post("/chat/completions").mock(return_value=_success_response())
+        client = OpenRouterClient(
+            "k", BASE_URL, "test-agent/1.0", max_retries=3, provider=provider, disable_reasoning=disable_reasoning
+        )
+        await client.chat_completion("m", [{"role": "user", "content": "hi"}])
+        import json as _json
+
+        body = _json.loads(route.calls.last.request.content)
+        assert body.get("reasoning") == expected
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_run_completion_prefers_reported_cost_over_pricing_table():
     with respx.mock(base_url=BASE_URL) as mock:
         mock.post("/chat/completions").mock(

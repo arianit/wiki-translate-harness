@@ -490,6 +490,12 @@ class Config(BaseModel):
 
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Send `reasoning: {"enabled": false}` on OpenRouter calls. Needed for
+    # reasoning-by-default models (e.g. qwen/qwen3.6-27b) that otherwise spend
+    # the whole output budget on hidden thinking (no max_tokens is sent, so a
+    # single call can run past request_timeout_s and retry in a loop). Off by
+    # default; only applies when provider is openrouter.
+    disable_reasoning: bool = False
 
     # Local OpenAI-compatible server (llama.cpp server, Ollama, LM Studio,
     # vLLM, ...) as an alternative to OpenRouter. Selected via provider: local.

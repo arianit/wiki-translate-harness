@@ -39,9 +39,11 @@ class OpenRouterClient:
         timeout: float = 120.0,
         max_retries: int = 5,
         provider: str = "openrouter",
+        disable_reasoning: bool = False,
     ):
         self.max_retries = max_retries
         self.provider = provider
+        self.disable_reasoning = disable_reasoning
         # Confirmed in practice, twice: httpx's own `timeout=` did not
         # reliably fire under real network conditions (sockets sat in
         # CLOSE-WAIT with unread data for 20+ minutes past the configured
@@ -121,6 +123,8 @@ class OpenRouterClient:
         # a 400, so only send temperature to non-Anthropic models.
         if not model.startswith(("anthropic/", "claude-")):
             payload["temperature"] = temperature
+        if self.disable_reasoning and self.provider == "openrouter":
+            payload["reasoning"] = {"enabled": False}
         if self.provider == "experiential":
             # OpenAI-standard attribution field (Experiential Labs' Cost API
             # docs: "Pass the OpenAI-standard `safety_identifier` on every

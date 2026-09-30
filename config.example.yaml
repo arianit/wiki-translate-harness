@@ -124,6 +124,10 @@ stats_path: stats.json
 
 # openrouter_api_key: sk-or-...   # prefer the OPENROUTER_API_KEY env var instead
 openrouter_base_url: https://openrouter.ai/api/v1
+# Send reasoning: {enabled: false} on OpenRouter calls. Needed for
+# reasoning-by-default models (e.g. qwen/qwen3.6-27b) that otherwise spend the
+# whole output budget on hidden thinking and time out. Off by default.
+# disable_reasoning: true
 
 # Used only when provider: local. Default matches llama.cpp server's
 # OpenAI-compatible endpoint (`llama-server -m model.gguf --port 8080`);
