@@ -30,8 +30,8 @@ the demo article, and where repos get cloned. Cells that write to the
 shared translation queue do nothing unless you set `ALLOW_QUEUE_WRITES`
 to `"yes"`.
 
-The notebook creates `out/` and `frwiki-sqwiki-translation/` in the folder
-you run it from. Both are git-ignored.
+The notebook creates `out/` in the folder you run it from, and clones the
+skill and harness repos into the `WORK` folder from the Setup cell.
 
 ## Present it as slides
 
