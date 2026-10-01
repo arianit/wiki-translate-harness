@@ -33,6 +33,9 @@ to `"yes"`.
 The notebook creates `out/` in the folder you run it from, and clones the
 skill and harness repos into the `WORK` folder from the Setup cell.
 
+**Human Wikipedian review is always mandatory** before anything produced here goes live on
+sq.wikipedia.
+
 ## Present it as slides
 
 ```bash
