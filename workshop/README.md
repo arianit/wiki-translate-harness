@@ -14,8 +14,8 @@ You need Python 3.10+, `git`, and [Claude Code](https://docs.claude.com/en/docs/
 (`claude`), logged in. The `claude` cells do not work without it.
 
 ```bash
-git clone https://github.com/arianit/wiki-translate-workshop
-cd wiki-translate-workshop
+git clone https://github.com/arianit/wiki-translate-harness
+cd wiki-translate-harness/workshop
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 jupyter lab workshop-walkthrough.ipynb
@@ -30,8 +30,11 @@ the demo article, and where repos get cloned. Cells that write to the
 shared translation queue do nothing unless you set `ALLOW_QUEUE_WRITES`
 to `"yes"`.
 
-The notebook creates `out/` and `frwiki-sqwiki-translation/` in the folder
-you run it from. Both are git-ignored.
+The notebook creates `out/` in the folder you run it from, and clones the
+skill and harness repos into the `WORK` folder from the Setup cell.
+
+**Human Wikipedian review is always mandatory** before anything produced here goes live on
+sq.wikipedia.
 
 ## Present it as slides
 
