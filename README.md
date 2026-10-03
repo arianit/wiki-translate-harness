@@ -11,7 +11,7 @@ repairs, caches, verifies facts, and saves. It never publishes anything.
 
 ## How it works
 
-![Per-chunk translation pipeline: fetch and split an article, then for each chunk check the cache, build a prompt from the skill plus verified facts, send it to one of the engines, validate and repair or flag for review, cache the result, then assemble, post-process, and write output and report files.](docs/architecture.svg)
+![Translation pipeline in three stages: prepare (fetch, verify facts, split), per chunk (cache, translate, validate, repair), and whole article (assemble, fix and validate, repair or withhold for human review, optional semantic review, write output and report).]](docs/architecture.svg)
 
 1. Fetch the article and split it into chunks.
 2. Look up link targets, templates and infobox parameters on Wikidata and
@@ -19,7 +19,7 @@ repairs, caches, verifies facts, and saves. It never publishes anything.
 3. Translate each chunk (in parallel, up to `workers`). Chunks already in
    the translation-memory cache are reused.
 4. Validate each chunk. On a defect, ask the model to repair it; if repair
-   fails, the chunk goes to a human-review queue instead of being shipped.
+   fails, the article fails and is not saved (partial progress is kept).
 5. Assemble the article, apply deterministic fixes, validate it again
    (statically and by rendering it through the target wiki's parse API),
    and write the `.wiki` file plus a report.
