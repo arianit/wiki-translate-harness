@@ -11,7 +11,7 @@ repairs, caches, verifies facts, and saves. It never publishes anything.
 
 ## How it works
 
-![Translation pipeline in three stages: prepare (fetch, verify facts, split), per chunk (cache, translate, validate, repair), and whole article (assemble, fix and validate, repair or withhold for human review, optional semantic review, write output and report).]](docs/architecture.svg)
+![Translation pipeline in three stages: prepare (fetch, verify facts, split), per chunk (cache, translate, validate, repair), and whole article (assemble, fix and validate, repair or withhold for human review, optional semantic review, write output and report).](docs/architecture.svg)
 
 1. Fetch the article and split it into chunks.
 2. Look up link targets, templates and infobox parameters on Wikidata and
