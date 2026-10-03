@@ -399,3 +399,8 @@ pytest
 - The parameter-name fixes only cover patterns seen so far. A new
   mistranslated name won't be caught until added to
   `ALBANIAN_TO_ENGLISH_CS1_PARAMS`.
+
+## Licence
+
+GPL-3.0-or-later. See [LICENSE](LICENSE). The `workshop/` directory keeps
+its own licence (CC BY-SA 4.0, see `workshop/LICENSE`).
