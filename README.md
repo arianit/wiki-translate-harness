@@ -323,7 +323,7 @@ each 1 to 10 on five criteria, and ranks them. Results go to
 `--no-evaluation` skips the judge.
 
 Example results for "Enji (deity)" are in
-[issue #1](https://github.com/arianit/wiki-translate-harness/issues/1):
+[issue #1](https://github.com/arianit/wiki-translation-harness/issues/1):
 `deepseek/deepseek-v3.2` gave the best quality for the cost;
 `google/gemini-2.5-flash` matched its quality and was about 3× faster at
 twice the price.

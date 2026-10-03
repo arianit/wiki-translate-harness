@@ -14,8 +14,8 @@ You need Python 3.10+, `git`, and [Claude Code](https://docs.claude.com/en/docs/
 (`claude`), logged in. The `claude` cells do not work without it.
 
 ```bash
-git clone https://github.com/arianit/wiki-translate-harness
-cd wiki-translate-harness/workshop
+git clone https://github.com/arianit/wiki-translation-harness
+cd wiki-translation-harness/workshop
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 jupyter lab workshop-walkthrough.ipynb
@@ -47,7 +47,7 @@ jupyter nbconvert workshop-walkthrough.ipynb --to slides --post serve
 | Repo | What it is |
 |---|---|
 | [enwiki-sqwiki-translation](https://github.com/arianit/enwiki-sqwiki-translation) | the translation skill |
-| [wiki-translate-harness](https://github.com/arianit/wiki-translate-harness) | the automated pipeline |
+| [wiki-translation-harness](https://github.com/arianit/wiki-translation-harness) | the automated pipeline |
 | [wiki-translate-queue](https://github.com/arianit/wiki-translate-queue) | shared list of articles to translate |
 | [albanian-language-tech-plan](https://github.com/arianit/albanian-language-tech-plan) | the wider plan for Albanian language technology |
 
